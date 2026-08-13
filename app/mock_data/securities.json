@@ -1,0 +1,47 @@
+[
+  {
+    "securityId": 101,
+    "securityCode": "005930",
+    "securityName": "삼성전자",
+    "marketType": "KOSPI",
+    "sectorName": "전기전자",
+    "industryName": "반도체",
+    "isActive": true
+  },
+  {
+    "securityId": 102,
+    "securityCode": "000660",
+    "securityName": "SK하이닉스",
+    "marketType": "KOSPI",
+    "sectorName": "전기전자",
+    "industryName": "반도체",
+    "isActive": true
+  },
+  {
+    "securityId": 103,
+    "securityCode": "035420",
+    "securityName": "NAVER",
+    "marketType": "KOSPI",
+    "sectorName": "서비스업",
+    "industryName": "인터넷",
+    "isActive": true
+  },
+  {
+    "securityId": 104,
+    "securityCode": "035720",
+    "securityName": "카카오",
+    "marketType": "KOSPI",
+    "sectorName": "서비스업",
+    "industryName": "인터넷",
+    "isActive": true
+  },
+  {
+    "securityId": 105,
+    "securityCode": "005380",
+    "securityName": "현대차",
+    "marketType": "KOSPI",
+    "sectorName": "운수장비",
+    "industryName": "자동차",
+    "isActive": true
+  }
+]

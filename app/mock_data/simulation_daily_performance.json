@@ -1,0 +1,36 @@
+[
+  { "simulation_variant_id": 1001, "performance_date": "2026-03-01", "cash_balance": 5000000.0, "holdings_market_value": 0.0, "portfolio_value": 5000000.0, "daily_return": 0.0, "cumulative_return": 0.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-03-01", "cash_balance": 5000000.0, "holdings_market_value": 0.0, "portfolio_value": 5000000.0, "daily_return": 0.0, "cumulative_return": 0.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-03-01", "cash_balance": 5000000.0, "holdings_market_value": 0.0, "portfolio_value": 5000000.0, "daily_return": 0.0, "cumulative_return": 0.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-03-01", "cash_balance": 5000000.0, "holdings_market_value": 0.0, "portfolio_value": 5000000.0, "daily_return": 0.0, "cumulative_return": 0.0, "drawdown_rate": 0.0 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-03-15", "cash_balance": 3600000.0, "holdings_market_value": 1460000.0, "portfolio_value": 5060000.0, "daily_return": 0.012, "cumulative_return": 1.2, "drawdown_rate": -0.5 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-03-15", "cash_balance": 3250000.0, "holdings_market_value": 1900000.0, "portfolio_value": 5150000.0, "daily_return": 0.03, "cumulative_return": 3.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-03-15", "cash_balance": 2900000.0, "holdings_market_value": 2200000.0, "portfolio_value": 5100000.0, "daily_return": 0.02, "cumulative_return": 2.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-03-15", "cash_balance": 5000000.0, "holdings_market_value": 0.0, "portfolio_value": 4920000.0, "daily_return": -0.016, "cumulative_return": -1.6, "drawdown_rate": -1.6 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-04-01", "cash_balance": 3600000.0, "holdings_market_value": 1520000.0, "portfolio_value": 5120000.0, "daily_return": 0.0118, "cumulative_return": 2.4, "drawdown_rate": -1.0 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-04-01", "cash_balance": 3250000.0, "holdings_market_value": 2070000.0, "portfolio_value": 5320000.0, "daily_return": 0.033, "cumulative_return": 6.4, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-04-01", "cash_balance": 2900000.0, "holdings_market_value": 2350000.0, "portfolio_value": 5250000.0, "daily_return": 0.0294, "cumulative_return": 5.0, "drawdown_rate": 0.0 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-04-01", "cash_balance": 2920000.0, "holdings_market_value": 1860000.0, "portfolio_value": 4780000.0, "daily_return": -0.0284, "cumulative_return": -4.4, "drawdown_rate": -4.4 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-04-18", "cash_balance": 3600000.0, "holdings_market_value": 1350000.0, "portfolio_value": 4950000.0, "daily_return": -0.0332, "cumulative_return": -1.0, "drawdown_rate": -3.3 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-04-18", "cash_balance": 3250000.0, "holdings_market_value": 1980000.0, "portfolio_value": 5230000.0, "daily_return": -0.0169, "cumulative_return": 4.6, "drawdown_rate": -1.7 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-04-18", "cash_balance": 2900000.0, "holdings_market_value": 2230000.0, "portfolio_value": 5130000.0, "daily_return": -0.0228, "cumulative_return": 2.6, "drawdown_rate": -2.3 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-04-18", "cash_balance": 2920000.0, "holdings_market_value": 1740000.0, "portfolio_value": 4660000.0, "daily_return": -0.0251, "cumulative_return": -6.8, "drawdown_rate": -6.8 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-05-10", "cash_balance": 2040000.0, "holdings_market_value": 3040000.0, "portfolio_value": 5080000.0, "daily_return": 0.0262, "cumulative_return": 1.6, "drawdown_rate": -3.3 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-05-10", "cash_balance": 3250000.0, "holdings_market_value": 2200000.0, "portfolio_value": 5450000.0, "daily_return": 0.042, "cumulative_return": 9.0, "drawdown_rate": -1.7 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-05-10", "cash_balance": 2900000.0, "holdings_market_value": 2440000.0, "portfolio_value": 5340000.0, "daily_return": 0.0409, "cumulative_return": 6.8, "drawdown_rate": -2.3 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-05-10", "cash_balance": 2920000.0, "holdings_market_value": 1930000.0, "portfolio_value": 4850000.0, "daily_return": 0.0407, "cumulative_return": -3.0, "drawdown_rate": -6.8 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-06-15", "cash_balance": 2040000.0, "holdings_market_value": 3140000.0, "portfolio_value": 5180000.0, "daily_return": 0.0196, "cumulative_return": 3.6, "drawdown_rate": -3.3 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-06-15", "cash_balance": 3250000.0, "holdings_market_value": 2430000.0, "portfolio_value": 5680000.0, "daily_return": 0.0422, "cumulative_return": 13.6, "drawdown_rate": -1.7 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-06-15", "cash_balance": 2900000.0, "holdings_market_value": 2600000.0, "portfolio_value": 5500000.0, "daily_return": 0.0299, "cumulative_return": 10.0, "drawdown_rate": -2.3 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-06-15", "cash_balance": 2920000.0, "holdings_market_value": 2060000.0, "portfolio_value": 4980000.0, "daily_return": 0.0268, "cumulative_return": -0.4, "drawdown_rate": -6.8 },
+
+  { "simulation_variant_id": 1001, "performance_date": "2026-07-29", "cash_balance": 2040000.0, "holdings_market_value": 3210000.0, "portfolio_value": 5250000.0, "daily_return": 0.0135, "cumulative_return": 5.0, "drawdown_rate": -3.2 },
+  { "simulation_variant_id": 1002, "performance_date": "2026-07-29", "cash_balance": 3120000.0, "holdings_market_value": 2730000.0, "portfolio_value": 5850000.0, "daily_return": 0.0299, "cumulative_return": 17.0, "drawdown_rate": -1.8 },
+  { "simulation_variant_id": 1003, "performance_date": "2026-07-29", "cash_balance": 2900000.0, "holdings_market_value": 2720000.0, "portfolio_value": 5620000.0, "daily_return": 0.0218, "cumulative_return": 12.4, "drawdown_rate": -2.4 },
+  { "simulation_variant_id": 1004, "performance_date": "2026-07-29", "cash_balance": 2920000.0, "holdings_market_value": 2140000.0, "portfolio_value": 5060000.0, "daily_return": 0.016, "cumulative_return": 1.2, "drawdown_rate": -6.8 }
+]

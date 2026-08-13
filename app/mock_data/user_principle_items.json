@@ -1,0 +1,43 @@
+[
+  {
+    "principleSetItemId": 1001,
+    "principleSetId": 21,
+    "principleRecommendationId": 51,
+    "principleText": "한 종목의 비중은 전체 투자금의 25%를 넘지 않는다.",
+    "sortOrder": 1,
+    "ruleJson": {
+      "ruleType": "MAX_POSITION_WEIGHT",
+      "parameters": {
+        "maxWeight": 0.25
+      }
+    }
+  },
+  {
+    "principleSetItemId": 1002,
+    "principleSetId": 21,
+    "principleRecommendationId": 52,
+    "principleText": "매입가 대비 -10% 하락 시 지체 없이 손절하고, +20% 상승 시 차익실현한다.",
+    "sortOrder": 2,
+    "ruleJson": {
+      "ruleType": "STOP_LOSS_AND_TAKE_PROFIT",
+      "parameters": {
+        "stopLossPercent": -10.0,
+        "takeProfitPercent": 20.0
+      }
+    }
+  },
+  {
+    "principleSetItemId": 1003,
+    "principleSetId": 21,
+    "principleRecommendationId": null,
+    "principleText": "최근 5거래일 동안 15% 이상 급등한 종목은 추격 매수하지 않는다.",
+    "sortOrder": 3,
+    "ruleJson": {
+      "ruleType": "CHASE_BUY_LIMIT",
+      "parameters": {
+        "lookbackTradingDays": 5,
+        "maxRisePercent": 15.0
+      }
+    }
+  }
+]

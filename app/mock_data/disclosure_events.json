@@ -1,0 +1,41 @@
+[
+  {
+    "eventId": 9001,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "eventDate": "2026-03-05",
+    "eventType": "SUPPLY_CONTRACT",
+    "reportName": "[기타경영사항] 대규모 단일판매·공급계약 체결",
+    "contractAmount": 5000000000000.0,
+    "contractToRevenueRatio": 0.35,
+    "direction": "POSITIVE",
+    "impactScore": 88.0,
+    "analysisReason": "매출액 대비 35% 규모의 글로벌 차세대 AI 반도체 공급 계약 체결 호재 공시"
+  },
+  {
+    "eventId": 9002,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "eventDate": "2026-03-10",
+    "eventType": "SUPPLY_CONTRACT",
+    "reportName": "[기타경영사항] HBM3E 수주 확정 공시",
+    "contractAmount": 3200000000000.0,
+    "contractToRevenueRatio": 0.28,
+    "direction": "POSITIVE",
+    "impactScore": 92.0,
+    "analysisReason": "HBM 메모리 신규 독점 계약 호재 공시"
+  },
+  {
+    "eventId": 9003,
+    "securityId": 104,
+    "securityName": "카카오",
+    "eventDate": "2026-04-18",
+    "eventType": "REGULATORY_RISK",
+    "reportName": "[기타경영사항] 공정위 조사 착수 및 소송 피소",
+    "contractAmount": 0.0,
+    "contractToRevenueRatio": 0.0,
+    "direction": "NEGATIVE",
+    "impactScore": 22.0,
+    "analysisReason": "사법 리스크 및 지배구조 악재 공시 발령"
+  }
+]

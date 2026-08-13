@@ -1,0 +1,98 @@
+[
+  {
+    "tradeId": 501,
+    "accountId": 1,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-03-05T10:00:00Z",
+    "quantity": 25.0,
+    "unitPrice": 70500.0,
+    "transactionCostAmount": 264.0,
+    "rationaleText": "글로벌 AI 반도체 수요 급증 뉴스 확인 및 추가 상승 기대감으로 1차 분할 매수"
+  },
+  {
+    "tradeId": 502,
+    "accountId": 1,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-03-12T09:30:00Z",
+    "quantity": 10.0,
+    "unitPrice": 145000.0,
+    "transactionCostAmount": 217.0,
+    "rationaleText": "HBM3E 독점 공급 기대감 보고 매수"
+  },
+  {
+    "tradeId": 503,
+    "accountId": 1,
+    "securityId": 104,
+    "securityName": "카카오",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-04-02T11:00:00Z",
+    "quantity": 30.0,
+    "unitPrice": 51000.0,
+    "transactionCostAmount": 229.0,
+    "rationaleText": "단기 급등 소식 접하고 쫓아서 신규 매수 (추격 매수)"
+  },
+  {
+    "tradeId": 504,
+    "accountId": 1,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "tradeSide": "SELL",
+    "tradedAt": "2026-04-18T14:20:00Z",
+    "quantity": 5.0,
+    "unitPrice": 162000.0,
+    "transactionCostAmount": 1741.0,
+    "rationaleText": "미국 증시 급락 및 불안감 가중되어 공포감에 일단 50% 물량 매도 처리"
+  },
+  {
+    "tradeId": 505,
+    "accountId": 1,
+    "securityId": 104,
+    "securityName": "카카오",
+    "tradeSide": "SELL",
+    "tradedAt": "2026-05-02T10:15:00Z",
+    "quantity": 30.0,
+    "unitPrice": 46500.0,
+    "transactionCostAmount": 3000.0,
+    "rationaleText": "주가 계속 밀려서 -8.8% 손실 상황에서 참지 못하고 패닉 셀 (공포 매도)"
+  },
+  {
+    "tradeId": 506,
+    "accountId": 1,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-05-20T09:10:00Z",
+    "quantity": 15.0,
+    "unitPrice": 77000.0,
+    "transactionCostAmount": 173.0,
+    "rationaleText": "실적 발표 앞두고 분할 매수"
+  },
+  {
+    "tradeId": 507,
+    "accountId": 1,
+    "securityId": 105,
+    "securityName": "현대차",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-06-10T13:45:00Z",
+    "quantity": 8.0,
+    "unitPrice": 245000.0,
+    "transactionCostAmount": 294.0,
+    "rationaleText": "인도 법인 상장 호재 기사 보고 가치주 포트폴리오 편입 목적으로 구매"
+  },
+  {
+    "tradeId": 508,
+    "accountId": 1,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "SELL",
+    "tradedAt": "2026-07-10T15:00:00Z",
+    "quantity": 20.0,
+    "unitPrice": 82000.0,
+    "transactionCostAmount": 3526.0,
+    "rationaleText": "수익률 +16% 달성 후 목표가 근접하여 1차 차익실현 분할 매도"
+  }
+]

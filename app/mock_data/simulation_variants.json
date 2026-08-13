@@ -1,0 +1,52 @@
+[
+  {
+    "simulationVariantId": 1001,
+    "simulationRunId": 101,
+    "variantType": "ACTUAL_USER",
+    "variantName": "실제 나",
+    "botVersionId": null,
+    "randomSeed": null,
+    "variantConfigJson": null,
+    "createdAt": "2026-03-01T09:00:00Z"
+  },
+  {
+    "simulationVariantId": 1002,
+    "simulationRunId": 101,
+    "variantType": "PERSONAL_BOT",
+    "variantName": "나의 투자봇 v1",
+    "botVersionId": 1,
+    "randomSeed": null,
+    "variantConfigJson": {
+      "maxPositionWeight": 0.25,
+      "stopLossPercent": -10.0,
+      "takeProfitPercent": 20.0
+    },
+    "createdAt": "2026-03-01T09:00:00Z"
+  },
+  {
+    "simulationVariantId": 1003,
+    "simulationRunId": 101,
+    "variantType": "FAMOUS_STRATEGY",
+    "variantName": "우량 가치·품질 퀀트 봇",
+    "botVersionId": null,
+    "randomSeed": null,
+    "variantConfigJson": {
+      "strategyCode": "VALUE_QUALITY",
+      "targetSector": "KOSPI200"
+    },
+    "createdAt": "2026-03-01T09:00:00Z"
+  },
+  {
+    "simulationVariantId": 1004,
+    "simulationRunId": 101,
+    "variantType": "RANDOM_BOT",
+    "variantName": "원숭이 봇",
+    "botVersionId": null,
+    "randomSeed": 42,
+    "variantConfigJson": {
+      "mcRunCount": 500,
+      "selectedPercentile": "MEDIAN"
+    },
+    "createdAt": "2026-03-01T09:00:00Z"
+  }
+]

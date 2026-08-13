@@ -1,0 +1,93 @@
+[
+  {
+    "simulatedTradeId": 5001,
+    "simulationVariantId": 1001,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "tradeSide": "SELL",
+    "tradedAt": "2026-04-18T09:00:00Z",
+    "quantity": 10.0,
+    "unitPrice": 165000.0,
+    "transactionCostAmount": 3547.0,
+    "decisionReason": "[사용자 거래] 지수 하락 공포로 인한 분할 매도 실행",
+    "triggeredPrincipleSetItemId": null
+  },
+  {
+    "simulatedTradeId": 5002,
+    "simulationVariantId": 1001,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-05-10T10:30:00Z",
+    "quantity": 20.0,
+    "unitPrice": 78000.0,
+    "transactionCostAmount": 234.0,
+    "decisionReason": "[사용자 거래] 단기 상승 뉴스 확인 후 추격 매수",
+    "triggeredPrincipleSetItemId": null
+  },
+  {
+    "simulatedTradeId": 5003,
+    "simulationVariantId": 1002,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-03-05T09:00:00Z",
+    "quantity": 25.0,
+    "unitPrice": 70000.0,
+    "transactionCostAmount": 262.5,
+    "decisionReason": "[AI 팩터 통과] 팩터 점수 78.5점 초과 및 상승 추세 감지",
+    "triggeredPrincipleSetItemId": 1001
+  },
+  {
+    "simulatedTradeId": 5004,
+    "simulationVariantId": 1002,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-03-10T09:00:00Z",
+    "quantity": 15.0,
+    "unitPrice": 142000.0,
+    "transactionCostAmount": 319.5,
+    "decisionReason": "[공시 호재 반영] 대규모 공급계약 체결 공시 감지 (점수: 85점)",
+    "triggeredPrincipleSetItemId": 1002
+  },
+  {
+    "simulatedTradeId": 5005,
+    "simulationVariantId": 1002,
+    "securityId": 102,
+    "securityName": "SK하이닉스",
+    "tradeSide": "SELL",
+    "tradedAt": "2026-07-15T09:00:00Z",
+    "quantity": 15.0,
+    "unitPrice": 182000.0,
+    "transactionCostAmount": 5869.5,
+    "decisionReason": "[원칙 익절 발동] 목표 익절 수익률 +20.0% 달성으로 기계적 이익 실현",
+    "triggeredPrincipleSetItemId": 1002
+  },
+  {
+    "simulatedTradeId": 5006,
+    "simulationVariantId": 1003,
+    "securityId": 101,
+    "securityName": "삼성전자",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-03-05T09:00:00Z",
+    "quantity": 30.0,
+    "unitPrice": 70000.0,
+    "transactionCostAmount": 315.0,
+    "decisionReason": "[우량 퀀트 통과] 저PER/고ROE 스크리닝 상위 5% 편입",
+    "triggeredPrincipleSetItemId": null
+  },
+  {
+    "simulatedTradeId": 5007,
+    "simulationVariantId": 1004,
+    "securityId": 104,
+    "securityName": "카카오",
+    "tradeSide": "BUY",
+    "tradedAt": "2026-04-01T09:00:00Z",
+    "quantity": 40.0,
+    "unitPrice": 52000.0,
+    "transactionCostAmount": 312.0,
+    "decisionReason": "[원숭이 몬테카를로] 무작위 매수 난수 추출 체결",
+    "triggeredPrincipleSetItemId": null
+  }
+]

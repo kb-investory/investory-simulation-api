@@ -1,0 +1,49 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Environment files (keep only the public template)
+.env
+.env.*
+!.env.example
+
+# Credentials and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials.json
+service-account*.json
+
+# Runtime, test, and editor artifacts
+*.log
+logs/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local documentation and investigation artifacts
+docs/
+scratch/
+ERD.md
+
+# Database creation scripts, local databases, and dumps
+migrations/
+*.sql
+*.sql.gz
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.dump
+*.dump.gz
+backups/

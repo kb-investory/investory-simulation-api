@@ -1,0 +1,13 @@
+{
+  "simulationRunId": 101,
+  "userId": 1,
+  "principleSetId": 21,
+  "periodStart": "2026-03-01",
+  "periodEnd": "2026-07-29",
+  "initialCapital": 5000000.0,
+  "simulationVersion": "v1.0",
+  "runStatus": "COMPLETED",
+  "errorMessage": null,
+  "createdAt": "2026-07-30T10:00:00Z",
+  "completedAt": "2026-07-30T10:00:02Z"
+}
