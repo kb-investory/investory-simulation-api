@@ -229,6 +229,56 @@ def _fallback_proposed_value(config: dict, current_value):
     return max(current, proposed)
 
 
+def _trade_snapshot(trade: dict) -> dict:
+    """Return the factual execution details needed to replay one decision."""
+    quantity = float(trade.get("quantity") or 0.0)
+    unit_price = float(trade.get("unitPrice") or trade.get("unit_price") or 0.0)
+    return {
+        "quantity": quantity,
+        "unitPrice": unit_price,
+        "notionalAmount": round(quantity * unit_price, 2),
+        "transactionCostAmount": round(
+            float(trade.get("transactionCostAmount") or trade.get("transaction_cost_amount") or 0.0),
+            2,
+        ),
+    }
+
+
+def _recommended_action(actual_action: str, bot_action: str, config: Optional[dict]) -> str:
+    if config:
+        return config["action"]
+    if bot_action == "HOLD":
+        return "\uc6d0\uce59\ubd07\uc740 \ud574\ub2f9 \uc2dc\uc810\uc5d0 \ub9e4\ub9e4\ud558\uc9c0 \uc54a\uace0 \uad00\ub9dd\ud588\uc2b5\ub2c8\ub2e4."
+    if bot_action in {"BUY", "ADD", "SELL", "REDUCE"}:
+        return f"\uc6d0\uce59\ubd07\uc758 \ud310\ub2e8({bot_action})\uc744 \uba3c\uc800 \uac80\ud1a0\ud558\uc138\uc694."
+    return "\uc801\uc6a9\ud560 \uc6d0\uce59 \ud310\ub2e8 \uc815\ubcf4\uac00 \ubd80\uc871\ud569\ub2c8\ub2e4."
+
+
+def _principle_review(
+    action: str,
+    bot_action: str,
+    matched_code: Optional[str],
+    evidence_codes: List[str],
+) -> dict:
+    """Describe the rule gap without calling an unmatched decision a violation."""
+    config = PATTERN_CONFIG.get(matched_code or "")
+    if config:
+        return {
+            "status": "VIOLATION_PATTERN_DETECTED",
+            "violatedPrinciple": config["title"],
+            "violationReason": config["description"],
+            "recommendedAction": _recommended_action(action, bot_action, config),
+            "targetRule": config["targetRule"],
+        }
+    return {
+        "status": "DECISION_DIFFERENCE",
+        "violatedPrinciple": None,
+        "violationReason": "\uba85\uc2dc\uc801 \uc6d0\uce59 \uc704\ubc18\uc740 \ud655\uc778\ub418\uc9c0 \uc54a\uc558\uc9c0\ub9cc, \uc6d0\uce59\ubd07\uacfc \ub2e4\ub978 \ud310\ub2e8\uc774 \uc788\uc5c8\uc2b5\ub2c8\ub2e4.",
+        "recommendedAction": _recommended_action(action, bot_action, None),
+        "targetRule": None,
+    }
+
+
 class DeterministicReportAnalyzer:
     """Create all report judgments and rule recommendations without an LLM."""
 
@@ -268,6 +318,10 @@ class DeterministicReportAnalyzer:
                 pattern_by_security.setdefault(security_id, []).append(code)
 
         decision_reviews = []
+        # A single actual fill can be associated with more than one divergence
+        # moment (for example, through the three-day fallback match below).
+        # The review is trade-centric, so retain only one review per trade.
+        reviewed_trade_ids = set()
         for moment in analytics.get("divergenceMoments") or []:
             date = str(moment.get("date") or "")[:10]
             security_id = int(moment.get("securityId") or 0)
@@ -296,6 +350,8 @@ class DeterministicReportAnalyzer:
             if trade is None:
                 continue
             trade_id = _trade_id(trade)
+            if trade_id in reviewed_trade_ids:
+                continue
             codes = list(pattern_by_trade_id.get(trade_id, []))
             codes.extend(pattern_by_security.get(security_id, []))
             subsequent = moment.get("subsequent5TradingDayReturnPercent")
@@ -335,11 +391,18 @@ class DeterministicReportAnalyzer:
                 "returnPercent": subsequent,
                 "principleBotAction": bot_action,
                 "principleFeedback": feedback,
+                "trade": _trade_snapshot(trade),
+                "principleReview": _principle_review(action, bot_action, matched_code, sorted(set(codes))),
+                "outcome": {
+                    "measurementPeriod": "5_TRADING_DAYS_AFTER_EXECUTION",
+                    "priceReturnPercent": subsequent,
+                    "summary": _outcome_text(action, subsequent),
+                },
                 "classificationSource": "DETERMINISTIC_RULE_ENGINE",
                 "evidenceCodes": sorted(set(codes)),
             })
+            reviewed_trade_ids.add(trade_id)
 
-        reviewed_trade_ids = {item.get("tradeId") for item in decision_reviews}
         for pattern in patterns:
             code = str(pattern.get("patternCode") or "")
             config = PATTERN_CONFIG.get(code)
@@ -384,6 +447,13 @@ class DeterministicReportAnalyzer:
                         f"실제 매매 근거: {recorded_rationale}. "
                         f"결과: {_outcome_text(action, subsequent)}."
                     ),
+                    "trade": _trade_snapshot(trade),
+                    "principleReview": _principle_review(action, "NOT_COMPARED", code, [code]),
+                    "outcome": {
+                        "measurementPeriod": "5_TRADING_DAYS_AFTER_EXECUTION",
+                        "priceReturnPercent": subsequent,
+                        "summary": _outcome_text(action, subsequent),
+                    },
                     "classificationSource": "DETERMINISTIC_RULE_ENGINE",
                     "evidenceCodes": [code],
                 })
@@ -559,8 +629,9 @@ class DeterministicReportAnalyzer:
             })
 
         return {
-            "reportVersion": "DETERMINISTIC_V10",
+            "reportVersion": "DETERMINISTIC_V11",
             "decisionReviews": decision_reviews,
+            "keyTradeReviews": decision_reviews,
             "evidenceReviews": evidence_reviews,
             "learningInsights": learning_insights,
             "principleDiscoveries": principle_discoveries,
