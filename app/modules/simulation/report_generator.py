@@ -12,6 +12,7 @@
 import json
 import logging
 import urllib.request
+from datetime import date
 from typing import List, Optional
 
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
@@ -23,11 +24,12 @@ logger = logging.getLogger(__name__)
 class SimulationReportGenerator:
     """시뮬레이션 백테스트 및 실제 매매 내역 기반 리포트 생성기"""
 
-    REPORT_VERSION = "DETERMINISTIC_V10"
+    REPORT_VERSION = "DETERMINISTIC_V11"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
         self.model = model or settings.REPORT_MODEL or "gpt-4o-mini"
+        self.thesis_model = settings.THESIS_VERIFICATION_MODEL or "gpt-5.4-nano"
 
     def generate_report(
         self,
@@ -90,7 +92,209 @@ class SimulationReportGenerator:
             report["generationMetadata"]["narrativeSource"] = "TEMPLATE_FALLBACK"
             report["generationMetadata"]["proposalSource"] = "DETERMINISTIC_FALLBACK"
             report["generationMetadata"]["narrativeStatus"] = "FAILED"
+        self._enrich_thesis_outcomes(report)
         return report
+
+    def _enrich_thesis_outcomes(self, report: dict) -> None:
+        """Verify whether a user's stated investment thesis later materialized.
+
+        This intentionally runs only for the three selected key trades and is
+        best-effort: an unavailable key/search never prevents report delivery.
+        """
+        reviews = report.get("keyTradeReviews", [])[:3]
+        if not reviews:
+            return
+        for review in reviews:
+            review["thesisOutcome"] = self._unconfirmed_thesis_outcome(
+                "WEB_SEARCH_NOT_RUN",
+                "웹 검색 검증을 아직 실행하지 못했습니다.",
+            )
+        if not self.api_key or self.api_key.startswith("your_") or len(self.api_key) <= 10:
+            report["generationMetadata"]["thesisVerificationStatus"] = "NOT_CONFIGURED"
+            return
+        completed = 0
+        for review in reviews:
+            try:
+                outcome = self._call_web_thesis_verifier(review)
+                if outcome:
+                    review["thesisOutcome"] = outcome
+                    completed += 1
+            except Exception as error:
+                logger.warning("Thesis verification failed for trade %s (%s)", review.get("tradeId"), type(error).__name__)
+        report["generationMetadata"]["thesisVerificationStatus"] = (
+            "COMPLETED" if completed == len(reviews) else "PARTIAL" if completed else "FAILED"
+        )
+        report["generationMetadata"]["thesisVerificationSource"] = "OPENAI_WEB_SEARCH" if completed else "NONE"
+        if completed:
+            self._apply_thesis_learning_and_principles(report)
+
+    @staticmethod
+    def _apply_thesis_learning_and_principles(report: dict) -> None:
+        """Feed completed web-verification judgments into insights and proposals."""
+        outcomes = [
+            item.get("thesisOutcome", {})
+            for item in report.get("keyTradeReviews", [])[:3]
+            if item.get("thesisOutcome", {}).get("verificationStatus") == "COMPLETED"
+        ]
+        realized = sum(item.get("verdict") == "REALIZED" for item in outcomes)
+        partial = sum(item.get("verdict") == "PARTIALLY_REALIZED" for item in outcomes)
+        not_realized = sum(item.get("verdict") == "NOT_REALIZED" for item in outcomes)
+        total = len(outcomes)
+        if not total:
+            return
+        insight = report.setdefault("learningInsights", {})
+        insight["thesisOutcomeSummary"] = {
+            "assessedTradeCount": total,
+            "realizedTradeCount": realized,
+            "partiallyRealizedTradeCount": partial,
+            "notRealizedTradeCount": not_realized,
+            "source": "OPENAI_WEB_SEARCH",
+        }
+        thesis_text = (
+            f"핵심 거래 {total}건의 투자 근거를 사후 검증한 결과, "
+            f"실현 {realized}건·일부 실현 {partial}건·미실현 {not_realized}건입니다."
+        )
+        insight["thesisNarrative"] = thesis_text
+        insight["narrative"] = f"{insight.get('narrative', '')} {thesis_text}".strip()
+        if not_realized + partial < 2:
+            return
+        proposal = {
+            "recommendationId": 3001,
+            "opportunityId": "THESIS_VALIDATION:audit.pre_trade_thesis_validation",
+            "recommendationCode": "THESIS_VALIDATION",
+            "proposalType": "DISCOVERY",
+            "principleType": "EVIDENCE_DISCIPLINE",
+            "title": "매수 전 투자 근거와 확인 시점 기록",
+            "description": "매수·매도 전 핵심 근거와 그 근거가 확인될 공시·실적·이벤트 시점을 기록하고, 사후에 실현 여부를 점검한다.",
+            "targetRule": "audit.pre_trade_thesis_validation",
+            "currentValue": None,
+            "sourcePrincipleText": None,
+            "proposedValue": True,
+            "allowedMinimum": True,
+            "allowedMaximum": True,
+            "strengthDirection": "ENABLE",
+            "changeType": "NEW_RULE",
+            "ruleJson": {"audit": {"pre_trade_thesis_validation": True}},
+            "evidence": {"assessedTradeCount": total, "partiallyRealizedTradeCount": partial, "notRealizedTradeCount": not_realized},
+            "judgmentSource": "OPENAI_WEB_SEARCH",
+            "proposalSource": "OPENAI_WEB_SEARCH",
+        }
+        discoveries = report.setdefault("principleDiscoveries", [])
+        if not any(item.get("recommendationCode") == "THESIS_VALIDATION" for item in discoveries):
+            discoveries.append(proposal)
+            report["recommendedPrinciples"] = discoveries + report.get("principleReinforcements", [])
+        actions = report.setdefault("improvementActions", [])
+        if not any(item.get("category") == "EVIDENCE_DISCIPLINE" for item in actions):
+            actions.append({
+                "category": "EVIDENCE_DISCIPLINE",
+                "title": "투자 근거 사후 점검",
+                "action": "각 매매 근거에 확인 시점을 기록하고, 결과 발표 후 근거가 실제로 실현됐는지 점검합니다.",
+                "judgmentSource": "OPENAI_WEB_SEARCH",
+            })
+
+    @staticmethod
+    def _unconfirmed_thesis_outcome(status: str, summary: str) -> dict:
+        return {
+            "verdict": "UNCONFIRMED",
+            "verdictLabel": "확인 불가",
+            "summary": summary,
+            "checkedUntil": date.today().isoformat(),
+            "claimResults": [],
+            "sourceCount": 0,
+            "verificationStatus": status,
+        }
+
+    def _call_web_thesis_verifier(self, review: dict) -> Optional[dict]:
+        rationale = str(review.get("decisionReason") or "").strip()
+        if not rationale or rationale == "사용자가 입력한 매매 근거 없음":
+            return self._unconfirmed_thesis_outcome("NO_RECORDED_RATIONALE", "기록된 매매 근거가 없어 검증할 수 없습니다.")
+        prompt = f"""당신은 투자 기록의 사후 근거 검증기다. 웹 검색으로 아래 거래 근거가 거래일 이후 실제로 실현됐는지만 판정한다.
+주가 수익률은 근거 실현 판정에 사용하지 마라. 예측·의견·루머를 사실로 취급하지 말고, 회사 공시·실적 발표·회사 IR·신뢰 가능한 보도처럼 검증 가능한 자료를 우선한다.
+
+거래: {review.get('securityName')} {review.get('action')}, 거래일 {str(review.get('tradedAt') or '')[:10]}
+사용자 근거: {rationale}
+검색 기준일: {date.today().isoformat()}
+
+반드시 JSON만 반환한다. verdict는 REALIZED, PARTIALLY_REALIZED, NOT_REALIZED, UNCONFIRMED 중 하나다.
+claimResults의 status도 동일한 네 값 중 하나이고, sources는 실제로 확인한 URL만 넣는다.
+{{
+  "verdict":"REALIZED",
+  "verdictLabel":"근거 실현",
+  "summary":"간결한 한국어 판정",
+  "claimResults":[{{"claim":"근거에서 분리한 주장","status":"REALIZED","evidence":"확인된 사실","sources":[{{"title":"자료 제목","publisher":"발행처","publishedAt":"YYYY-MM-DD 또는 null","url":"https://..."}}]}}]
+}}"""
+        schema = {
+            "type": "json_schema",
+            "name": "thesis_outcome",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["verdict", "verdictLabel", "summary", "claimResults"],
+                "properties": {
+                    "verdict": {"type": "string", "enum": ["REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"]},
+                    "verdictLabel": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "claimResults": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["claim", "status", "evidence", "sources"],
+                            "properties": {
+                                "claim": {"type": "string"},
+                                "status": {"type": "string", "enum": ["REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"]},
+                                "evidence": {"type": "string"},
+                                "sources": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "additionalProperties": False,
+                                        "required": ["title", "publisher", "publishedAt", "url"],
+                                        "properties": {
+                                            "title": {"type": "string"},
+                                            "publisher": {"type": "string"},
+                                            "publishedAt": {"type": ["string", "null"]},
+                                            "url": {"type": "string"},
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        payload = json.dumps({
+            "model": self.thesis_model,
+            "tools": [{"type": "web_search"}],
+            "input": prompt,
+            "text": {"format": schema},
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            "https://api.openai.com/v1/responses",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+        )
+        with urllib.request.urlopen(request, timeout=settings.LLM_TIMEOUT) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+        output_text = raw.get("output_text")
+        if not output_text:
+            output_text = next((content.get("text") for item in raw.get("output", []) for content in item.get("content", []) if content.get("type") == "output_text"), None)
+        parsed = json.loads(output_text or "")
+        if not isinstance(parsed, dict) or parsed.get("verdict") not in {"REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"}:
+            raise ValueError("Invalid thesis verification response")
+        claims = parsed.get("claimResults") if isinstance(parsed.get("claimResults"), list) else []
+        source_count = sum(len(item.get("sources") or []) for item in claims if isinstance(item, dict))
+        return {
+            "verdict": parsed["verdict"],
+            "verdictLabel": str(parsed.get("verdictLabel") or parsed["verdict"]),
+            "summary": str(parsed.get("summary") or ""),
+            "checkedUntil": date.today().isoformat(),
+            "claimResults": claims,
+            "sourceCount": source_count,
+            "verificationStatus": "COMPLETED",
+        }
 
     def _call_llm_for_narratives(self, report: dict) -> Optional[dict]:
         """Ask OpenAI only for prose; all classifications and numbers are immutable."""

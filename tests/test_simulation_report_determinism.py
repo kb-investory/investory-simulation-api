@@ -51,7 +51,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             self.analytics,
         )
 
-        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V10")
+        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V11")
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
         self.assertEqual(report["evidenceReviews"][0]["basisType"], "UNKNOWN")
         self.assertEqual(report["evidenceReviews"][0]["confidenceScore"], 10)
@@ -119,6 +119,57 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         )
         self.assertEqual(report["generationMetadata"]["narrativeStatus"], "COMPLETED")
 
+    def test_web_search_verification_is_added_only_for_key_trades(self):
+        generator = SimulationReportGenerator(api_key="configured-key")
+        report = generator.build_deterministic_report(
+            1, self.trades, self.participants, analytics=self.analytics,
+        )
+        verified = {
+            "verdict": "REALIZED",
+            "verdictLabel": "근거 실현",
+            "summary": "실적 개선이 이후 공시로 확인되었습니다.",
+            "checkedUntil": "2026-08-13",
+            "claimResults": [{"claim": "실적 개선", "status": "REALIZED", "sources": [{"url": "https://example.com"}]}],
+            "sourceCount": 1,
+            "verificationStatus": "COMPLETED",
+        }
+        with (
+            patch.object(generator, "_call_llm_for_narratives", return_value={}),
+            patch.object(generator, "_call_web_thesis_verifier", return_value=verified) as verifier,
+        ):
+            enriched = generator.enrich_report(report)
+
+        verifier.assert_called_once_with(enriched["keyTradeReviews"][0])
+        self.assertEqual(enriched["keyTradeReviews"][0]["thesisOutcome"], verified)
+        self.assertEqual(enriched["generationMetadata"]["thesisVerificationStatus"], "COMPLETED")
+        self.assertEqual(enriched["learningInsights"]["thesisOutcomeSummary"]["realizedTradeCount"], 1)
+
+    def test_unrealized_theses_add_insight_and_evidence_discipline_principle(self):
+        report = {
+            "keyTradeReviews": [
+                {"thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "NOT_REALIZED"}},
+                {"thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "PARTIALLY_REALIZED"}},
+            ],
+            "learningInsights": {"narrative": "기존 인사이트"},
+            "principleDiscoveries": [],
+            "principleReinforcements": [],
+            "recommendedPrinciples": [],
+            "improvementActions": [],
+        }
+
+        SimulationReportGenerator._apply_thesis_learning_and_principles(report)
+
+        self.assertEqual(report["learningInsights"]["thesisOutcomeSummary"], {
+            "assessedTradeCount": 2,
+            "realizedTradeCount": 0,
+            "partiallyRealizedTradeCount": 1,
+            "notRealizedTradeCount": 1,
+            "source": "OPENAI_WEB_SEARCH",
+        })
+        self.assertEqual(report["principleDiscoveries"][0]["recommendationCode"], "THESIS_VALIDATION")
+        self.assertEqual(report["recommendedPrinciples"][0]["targetRule"], "audit.pre_trade_thesis_validation")
+        self.assertEqual(report["improvementActions"][0]["category"], "EVIDENCE_DISCIPLINE")
+
     def test_deterministic_report_does_not_wait_for_llm(self):
         generator = SimulationReportGenerator(api_key="configured-key")
         with patch.object(generator, "_call_llm_for_narratives") as llm_call:
@@ -182,6 +233,73 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["decisionReviews"][0]["returnPercent"], 12.0)
         self.assertEqual(report["evidenceReviews"][0]["basis"], "DB에 기록된 매수 근거 4")
         self.assertEqual(report["evidenceReviews"][0]["returnPercent"], 12.0)
+
+    def test_key_trade_review_contains_execution_principle_and_outcome(self):
+        trade = {
+            "tradeId": 31,
+            "variantId": 1,
+            "securityId": 9,
+            "securityName": "테스트 종목",
+            "tradeSide": "BUY",
+            "quantity": 12,
+            "unitPrice": 15000,
+            "transactionCostAmount": 90,
+            "tradedAt": "2026-07-03T09:00:00",
+            "decisionReason": "급등세가 계속될 것으로 판단",
+        }
+        report = DeterministicReportAnalyzer().build(
+            [trade],
+            self.participants,
+            {
+                "divergenceMoments": [{
+                    "date": "2026-07-03",
+                    "securityId": 9,
+                    "actualUserActions": ["BUY"],
+                    "personalBotActions": ["HOLD"],
+                    "subsequent5TradingDayReturnPercent": -6.5,
+                }],
+                "behaviorPatterns": [{
+                    "patternCode": "FOMO_BUY",
+                    "count": 1,
+                    "evidenceTradeIds": [31],
+                }],
+            },
+        )
+
+        review = report["keyTradeReviews"][0]
+        self.assertEqual(report["keyTradeReviews"], report["decisionReviews"])
+        self.assertEqual(review["trade"], {
+            "quantity": 12.0,
+            "unitPrice": 15000.0,
+            "notionalAmount": 180000.0,
+            "transactionCostAmount": 90.0,
+        })
+        self.assertEqual(review["principleReview"]["status"], "VIOLATION_PATTERN_DETECTED")
+        self.assertEqual(review["principleReview"]["targetRule"], "entry.max_5day_return")
+        self.assertTrue(review["principleReview"]["recommendedAction"])
+        self.assertEqual(review["outcome"]["priceReturnPercent"], -6.5)
+        self.assertEqual(review["outcome"]["measurementPeriod"], "5_TRADING_DAYS_AFTER_EXECUTION")
+
+    def test_decision_review_is_not_duplicated_for_multiple_matching_moments(self):
+        duplicate_moment = {
+            "date": "2026-07-01",
+            "securityId": 7,
+            "actualUserActions": ["BUY"],
+            "personalBotActions": ["HOLD"],
+            "subsequent5TradingDayReturnPercent": -4.0,
+        }
+
+        report = DeterministicReportAnalyzer().build(
+            self.trades,
+            self.participants,
+            {
+                "divergenceMoments": [duplicate_moment, dict(duplicate_moment)],
+                "behaviorPatterns": [],
+            },
+        )
+
+        self.assertEqual([item["tradeId"] for item in report["decisionReviews"]], [11])
+        self.assertEqual([item["tradeId"] for item in report["evidenceReviews"]], [11])
 
     def test_hold_only_divergence_is_not_shown_as_an_actual_trade_review(self):
         report = DeterministicReportAnalyzer().build(

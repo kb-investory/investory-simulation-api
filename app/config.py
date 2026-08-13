@@ -31,6 +31,7 @@ class Settings:
     COMPILER_MODEL: str = os.getenv("COMPILER_MODEL", "gpt-4o-mini")
     DISCLOSURE_MODEL: str = os.getenv("DISCLOSURE_MODEL", "gpt-4o-mini")
     REPORT_MODEL: str = os.getenv("REPORT_MODEL", "gpt-4o-mini")
+    THESIS_VERIFICATION_MODEL: str = os.getenv("THESIS_VERIFICATION_MODEL", "gpt-5.4-nano")
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "30"))
     MAX_LLM_CALLS_PER_RUN: int = int(os.getenv("MAX_LLM_CALLS_PER_RUN", "50"))
 
