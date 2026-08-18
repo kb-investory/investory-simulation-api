@@ -29,6 +29,7 @@ from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.backtest import BacktestEngine
 from app.modules.simulation.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.report_generator import SimulationReportGenerator
+from app.modules.simulation.rationale_snapshots import build_rationale_type_snapshots
 from app.modules.simulation.analytics import (
     add_personal_bot_percentile,
     calculate_action_contributions,
@@ -691,6 +692,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             "behaviorPatterns": behavior_patterns,
             "actualPrincipleCompliance": actual_compliance,
             "positionSnapshots": position_snapshots,
+            "rationaleTypeSnapshots": build_rationale_type_snapshots(normalized_trades),
         }
 
         persistence_started = perf_counter()

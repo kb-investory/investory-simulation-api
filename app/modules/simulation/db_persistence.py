@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import pymysql
 from app.config import settings
+from app.modules.simulation.rationale_snapshots import apply_rationale_type_snapshots
 
 VARIANT_TYPE_TO_API_ID = {
     "ACTUAL_USER": 1,
@@ -265,20 +266,19 @@ def save_simulation_run_to_db(
                 unit_p = float(t.get("unitPrice") or t.get("unit_price") or 0.0)
                 cost = float(t.get("transactionCostAmount") or t.get("transaction_cost_amount") or 0.0)
                 reason = t.get("decisionReason") or t.get("decision_reason") or ""
-                rationale_label_type = t.get("rationaleLabelType") or t.get("rationale_label_type") or "UNCLASSIFIED"
                 principle_item_id = t.get("triggeredPrincipleSetItemId") or t.get("triggered_principle_set_item_id")
 
                 if principle_item_id not in valid_principle_item_ids:
                     principle_item_id = None
 
-                trade_rows.append((db_vid, sec_id, principle_item_id, side, traded_at, qty, unit_p, cost, reason, rationale_label_type))
+                trade_rows.append((db_vid, sec_id, principle_item_id, side, traded_at, qty, unit_p, cost, reason))
 
             if trade_rows:
                 cur.executemany(
                     """
                     INSERT INTO simulated_trades
-                    (simulation_variant_id, security_id, triggered_principle_set_item_id, trade_side, traded_at, quantity, unit_price, transaction_cost_amount, decision_reason, rationale_label_type, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    (simulation_variant_id, security_id, triggered_principle_set_item_id, trade_side, traded_at, quantity, unit_price, transaction_cost_amount, decision_reason, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                     """,
                     trade_rows,
                 )
@@ -652,7 +652,6 @@ def find_existing_simulation_from_db(
                 "unitPrice": float(t.get("unit_price") or 0.0),
                 "transactionCostAmount": float(t.get("transaction_cost_amount") or 0.0),
                 "decisionReason": t.get("decision_reason") or "",
-                "rationaleLabelType": t.get("rationale_label_type") or "UNCLASSIFIED",
                 "triggeredPrincipleSetItemId": t.get("triggered_principle_set_item_id")
             }
             for t in all_trades
@@ -675,6 +674,10 @@ def find_existing_simulation_from_db(
                 ) or {}
             except Exception:
                 analytics_obj = {}
+        apply_rationale_type_snapshots(
+            normalized_trades,
+            analytics_obj.get("rationaleTypeSnapshots") or [],
+        )
 
         personal_variant = next(
             (item for item in variants if item.get("variant_type") == "PERSONAL_BOT"),
@@ -849,7 +852,6 @@ def load_simulation_from_db_by_id(simulation_run_id: int) -> Optional[dict]:
                 "unitPrice": float(t.get("unit_price") or 0.0),
                 "transactionCostAmount": float(t.get("transaction_cost_amount") or 0.0),
                 "decisionReason": t.get("decision_reason") or "",
-                "rationaleLabelType": t.get("rationale_label_type") or "UNCLASSIFIED",
                 "triggeredPrincipleSetItemId": t.get("triggered_principle_set_item_id")
             }
             for t in all_trades
@@ -872,6 +874,10 @@ def load_simulation_from_db_by_id(simulation_run_id: int) -> Optional[dict]:
                 ) or {}
             except Exception:
                 analytics_obj = {}
+        apply_rationale_type_snapshots(
+            normalized_trades,
+            analytics_obj.get("rationaleTypeSnapshots") or [],
+        )
 
         personal_variant = next(
             (item for item in variants if item.get("variant_type") == "PERSONAL_BOT"),
