@@ -26,6 +26,7 @@ class ActualUserExecutionTests(unittest.TestCase):
                     "transactionCostAmount": 7.0,
                     "tradedAt": "2026-01-03T12:00:00Z",
                     "rationaleText": "실적 발표 전 수주 증가를 확인해 매수",
+                    "rationaleLabelType": "EVENT_REACTION",
                 }
             ],
             trading_days=["2026-01-05"],
@@ -42,6 +43,7 @@ class ActualUserExecutionTests(unittest.TestCase):
         self.assertEqual(trades[0].applied_trading_date, "2026-01-05")
         self.assertEqual(trades[0].execution_policy, "DATABASE_ACTUAL_FILL")
         self.assertEqual(trades[0].decision_reason, "실적 발표 전 수주 증가를 확인해 매수 (원 거래일 2026-01-03, 반영 거래일 2026-01-05)")
+        self.assertEqual(trades[0].rationale_label_type, "EVENT_REACTION")
         self.assertEqual(snapshots[0].holdings_market_value, 420.0)
 
     def test_missing_actual_rationale_is_explicit_and_not_invented(self):

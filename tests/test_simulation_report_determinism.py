@@ -51,7 +51,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             self.analytics,
         )
 
-        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V11")
+        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V12")
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
         self.assertEqual(report["evidenceReviews"][0]["basisType"], "UNKNOWN")
         self.assertEqual(report["evidenceReviews"][0]["confidenceScore"], 10)
@@ -200,7 +200,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertIn("원칙봇 수익률은 -5.12%", narrative)
         self.assertIn("실제 투자 수익률이 원칙봇보다 4.05%p 높았습니다", narrative)
 
-    def test_review_sections_keep_only_three_largest_outcomes_with_recorded_reasons(self):
+    def test_review_sections_keep_all_trades_and_select_three_key_outcomes(self):
         trades = []
         moments = []
         for index, outcome in enumerate((1.0, -8.0, 3.0, 12.0, -5.0), start=1):
@@ -227,12 +227,14 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             {"divergenceMoments": moments, "behaviorPatterns": []},
         )
 
-        self.assertEqual([item["tradeId"] for item in report["decisionReviews"]], [4, 2, 5])
-        self.assertEqual([item["tradeId"] for item in report["evidenceReviews"]], [4, 2, 5])
-        self.assertEqual(report["decisionReviews"][0]["decisionReason"], "DB에 기록된 매수 근거 4")
-        self.assertEqual(report["decisionReviews"][0]["returnPercent"], 12.0)
-        self.assertEqual(report["evidenceReviews"][0]["basis"], "DB에 기록된 매수 근거 4")
-        self.assertEqual(report["evidenceReviews"][0]["returnPercent"], 12.0)
+        self.assertEqual([item["tradeId"] for item in report["decisionReviews"]], [5, 4, 3, 2, 1])
+        self.assertEqual([item["tradeId"] for item in report["keyTradeReviews"]], [4, 2, 5])
+        self.assertEqual([item["tradeId"] for item in report["evidenceReviews"]], [5, 4, 3, 2, 1])
+        self.assertEqual(report["keyTradeReviews"][0]["decisionReason"], "DB에 기록된 매수 근거 4")
+        self.assertEqual(report["keyTradeReviews"][0]["returnPercent"], 12.0)
+        evidence = next(item for item in report["evidenceReviews"] if item["tradeId"] == 4)
+        self.assertEqual(evidence["basis"], "DB에 기록된 매수 근거 4")
+        self.assertEqual(evidence["returnPercent"], 12.0)
 
     def test_key_trade_review_contains_execution_principle_and_outcome(self):
         trade = {
@@ -267,7 +269,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         )
 
         review = report["keyTradeReviews"][0]
-        self.assertEqual(report["keyTradeReviews"], report["decisionReviews"])
+        self.assertEqual(report["keyTradeReviews"][0], report["decisionReviews"][0])
         self.assertEqual(review["trade"], {
             "quantity": 12.0,
             "unitPrice": 15000.0,
@@ -317,8 +319,9 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(report["decisionReviews"], [])
-        self.assertEqual(report["evidenceReviews"], [])
+        self.assertEqual([item["tradeId"] for item in report["decisionReviews"]], [11])
+        self.assertEqual(report["decisionReviews"][0]["principleJudgment"], "DECISION_DIFFERENCE")
+        self.assertEqual([item["tradeId"] for item in report["evidenceReviews"]], [11])
 
     def test_applied_date_can_match_original_trade_within_three_days(self):
         report = DeterministicReportAnalyzer().build(
@@ -477,6 +480,122 @@ class SimulationReportDeterminismTests(unittest.TestCase):
 
         self.assertEqual(report["recommendedPrinciples"], [])
         self.assertEqual(report["improvementActions"][0]["category"], "EVIDENCE_DISCIPLINE")
+
+    def test_database_rationale_type_precedes_keyword_fallback(self):
+        trade = {
+            "tradeId": 91,
+            "variantId": 1,
+            "securityId": 19,
+            "securityName": "근거테스트",
+            "tradeSide": "BUY",
+            "tradedAt": "2026-07-01T09:00:00",
+            "decisionReason": "좋아질 것으로 예상",
+            "rationaleLabelType": "EVENT_REACTION",
+        }
+
+        report = DeterministicReportAnalyzer().build([trade], self.participants, {})
+
+        evidence = report["evidenceReviews"][0]
+        self.assertEqual(evidence["basisType"], "EVENT")
+        self.assertEqual(evidence["databaseBasisType"], "EVENT_REACTION")
+        self.assertEqual(evidence["basisTypeSource"], "DATABASE")
+        self.assertEqual(evidence["verifiability"], "VERIFIABLE")
+
+    def test_principle_and_price_axes_create_four_review_cases(self):
+        actual = [
+            {
+                "tradeId": index,
+                "variantId": 1,
+                "securityId": index,
+                "securityName": f"종목 {index}",
+                "tradeSide": "BUY",
+                "tradedAt": "2026-07-01T09:00:00",
+                "decisionReason": "실적 확인 후 매수",
+            }
+            for index in range(1, 5)
+        ]
+        personal = [
+            {
+                "tradeId": 100 + index,
+                "variantId": 2,
+                "securityId": index,
+                "tradeSide": "BUY",
+                "tradedAt": "2026-07-01T09:00:00",
+            }
+            for index in (1, 2)
+        ]
+        prices = []
+        dates = [f"2026-07-{day:02d}" for day in range(1, 7)]
+        for security_id, final_price in ((1, 110), (2, 90), (3, 110), (4, 90)):
+            for offset, price_date in enumerate(dates):
+                close_price = 100 + (final_price - 100) * offset / 5
+                prices.append({"securityId": security_id, "priceDate": price_date, "closePrice": close_price})
+        analytics = {
+            "dailyPrices": prices,
+            "divergenceMoments": [
+                {"date": "2026-07-01", "securityId": 3, "actualUserActions": ["BUY"], "personalBotActions": ["HOLD"], "subsequent5TradingDayReturnPercent": 10},
+                {"date": "2026-07-01", "securityId": 4, "actualUserActions": ["BUY"], "personalBotActions": ["HOLD"], "subsequent5TradingDayReturnPercent": -10},
+            ],
+            "actualPrincipleCompliance": {
+                "violations": [
+                    {"tradeId": 3, "reasonCodes": ["ENTRY_RULE_VIOLATED"]},
+                    {"tradeId": 4, "reasonCodes": ["ENTRY_RULE_VIOLATED"]},
+                ]
+            },
+            "ruleSchema": {
+                "audit": {
+                    "interpreted_principles": [{
+                        "user_natural_text": "진입 조건을 충족할 때만 매수한다",
+                        "ai_mapped_rule": "entry.max_5day_return",
+                        "status": "CONFIRMED",
+                    }]
+                }
+            },
+        }
+
+        report = DeterministicReportAnalyzer().build(actual + personal, self.participants, analytics)
+        reviews = {item["tradeId"]: item for item in report["decisionReviews"]}
+
+        self.assertEqual(reviews[1]["reviewCase"], "GOOD_PROCESS_GOOD_OUTCOME")
+        self.assertEqual(reviews[2]["reviewCase"], "GOOD_PROCESS_BAD_OUTCOME")
+        self.assertEqual(reviews[3]["reviewCase"], "BAD_PROCESS_LUCKY_OUTCOME")
+        self.assertEqual(reviews[4]["reviewCase"], "BAD_PROCESS_BAD_OUTCOME")
+        self.assertEqual(report["principleReviewSummary"]["followedCount"], 2)
+        self.assertEqual(report["principleReviewSummary"]["violatedCount"], 2)
+        self.assertEqual(reviews[1]["matchedPrinciple"]["source"], "USER_PRINCIPLE")
+        security = next(item for item in report["securityEvidenceReviews"] if item["securityId"] == 1)
+        self.assertEqual(len(security["priceSeries"]), 6)
+        self.assertTrue(any(item["type"] == "OUTCOME_CHECKPOINT" for item in security["chartAnnotations"]))
+
+    def test_web_search_and_evidence_judgment_are_separate_agents(self):
+        generator = SimulationReportGenerator(api_key="configured-key")
+        review = {
+            "tradeId": 77,
+            "securityName": "테스트전자",
+            "action": "BUY",
+            "tradedAt": "2026-07-01",
+            "decisionReason": "신규 계약 기대",
+            "marketOutcome": {"return5dPercent": 99.0},
+        }
+        dossier = {"claimEvidence": [], "searchSource": "OPENAI_WEB_SEARCH"}
+        judgment = {
+            "verdict": "UNCONFIRMED",
+            "verdictLabel": "확인 불가",
+            "summary": "자료 부족",
+            "claimResults": [],
+            "sourceCount": 0,
+            "verificationStatus": "COMPLETED",
+        }
+        with (
+            patch("app.modules.simulation.report_generator.EvidenceSearchAgent.search", return_value=dossier) as search,
+            patch("app.modules.simulation.report_generator.EvidenceJudgmentAgent.judge", return_value=judgment) as judge,
+        ):
+            result = generator._call_web_thesis_verifier(review)
+
+        search.assert_called_once()
+        judge.assert_called_once()
+        self.assertIs(judge.call_args.args[1], dossier)
+        self.assertEqual(result, judgment)
 
 
 if __name__ == "__main__":

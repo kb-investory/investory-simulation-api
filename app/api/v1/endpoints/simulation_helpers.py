@@ -128,6 +128,7 @@ def normalize_trade(t) -> dict:
     execution_policy = t.get("executionPolicy") or t.get("execution_policy") or "NEXT_TRADING_DAY_OPEN"
     original_traded_at = t.get("originalTradedAt") or t.get("original_traded_at")
     applied_trading_date = t.get("appliedTradingDate") or t.get("applied_trading_date")
+    rationale_label_type = t.get("rationaleLabelType") or t.get("rationale_label_type") or "UNCLASSIFIED"
 
     return {
         "simulatedTradeId": t_id,
@@ -162,6 +163,8 @@ def normalize_trade(t) -> dict:
         "decisionReason": reason,
         "decision_reason": reason,
         "rationaleText": reason,
+        "rationaleLabelType": rationale_label_type,
+        "rationale_label_type": rationale_label_type,
 
         "triggeredPrincipleSetItemId": principle_item_id,
         "triggered_principle_set_item_id": principle_item_id,

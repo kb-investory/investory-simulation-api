@@ -64,6 +64,13 @@ PATTERN_CONFIG = {
     },
 }
 
+RATIONALE_TYPE_MAP = {
+    "FUNDAMENTAL_ANALYSIS": ("FUNDAMENTAL", 80),
+    "PRICE_TREND": ("TECHNICAL", 65),
+    "EVENT_REACTION": ("EVENT", 60),
+    "INTUITION_SOCIAL_SIGNAL": ("INTUITION_SOCIAL", 35),
+}
+
 
 def _variant_id(trade: dict) -> int:
     return int(
@@ -82,14 +89,56 @@ def _date_distance(left: str, right: str) -> int:
         return 999_999
 
 
-def _five_day_return(trade: dict, prices_by_security: Dict[int, List[tuple[str, float]]]) -> Optional[float]:
+def _future_price_outcome(
+    trade: dict,
+    prices_by_security: Dict[int, List[tuple[str, float]]],
+    trading_days: int,
+) -> dict:
     security_id = int(trade.get("securityId") or trade.get("security_id") or 0)
-    trade_date = _trade_date(trade)
     series = prices_by_security.get(security_id, [])
-    start_index = next((index for index, item in enumerate(series) if item[0] >= trade_date), None)
-    if start_index is None or start_index + 5 >= len(series) or series[start_index][1] <= 0:
-        return None
-    return round((series[start_index + 5][1] - series[start_index][1]) / series[start_index][1] * 100, 2)
+    start_index = next((index for index, item in enumerate(series) if item[0] >= _trade_date(trade)), None)
+    if start_index is None or start_index + trading_days >= len(series) or series[start_index][1] <= 0:
+        return {
+            "measurementTradingDays": trading_days,
+            "baseDate": series[start_index][0] if start_index is not None else None,
+            "evaluationDate": None,
+            "basePrice": series[start_index][1] if start_index is not None else None,
+            "evaluationPrice": None,
+            "returnPercent": None,
+        }
+    base_date, base_price = series[start_index]
+    evaluation_date, evaluation_price = series[start_index + trading_days]
+    return {
+        "measurementTradingDays": trading_days,
+        "baseDate": base_date,
+        "evaluationDate": evaluation_date,
+        "basePrice": base_price,
+        "evaluationPrice": evaluation_price,
+        "returnPercent": round((evaluation_price - base_price) / base_price * 100, 2),
+    }
+
+
+def _directional_outcome(action: str, return_percent: Optional[float]) -> str:
+    if return_percent is None:
+        return "INSUFFICIENT_DATA"
+    if return_percent == 0:
+        return "NEUTRAL"
+    favorable = (
+        action in {"BUY", "ADD"} and return_percent > 0
+    ) or (
+        action in {"SELL", "REDUCE"} and return_percent < 0
+    )
+    return "FAVORABLE" if favorable else "UNFAVORABLE"
+
+
+def _review_case(principle_judgment: str, market_outcome: str) -> str:
+    cases = {
+        ("FOLLOWED", "FAVORABLE"): "GOOD_PROCESS_GOOD_OUTCOME",
+        ("FOLLOWED", "UNFAVORABLE"): "GOOD_PROCESS_BAD_OUTCOME",
+        ("VIOLATED", "FAVORABLE"): "BAD_PROCESS_LUCKY_OUTCOME",
+        ("VIOLATED", "UNFAVORABLE"): "BAD_PROCESS_BAD_OUTCOME",
+    }
+    return cases.get((principle_judgment, market_outcome), "UNASSESSED")
 
 
 def _trade_date(trade: dict) -> str:
@@ -165,6 +214,30 @@ def _classify_basis(rationale: str) -> tuple[str, int]:
     return "OTHER", 45
 
 
+def _basis_classification(trade: dict, rationale: str) -> tuple[str, int, str, str]:
+    database_type = str(
+        trade.get("rationaleLabelType")
+        or trade.get("rationale_label_type")
+        or "UNCLASSIFIED"
+    )
+    mapped = RATIONALE_TYPE_MAP.get(database_type)
+    if mapped:
+        return mapped[0], mapped[1], "DATABASE", database_type
+    basis_type, score = _classify_basis(rationale)
+    source = "DETERMINISTIC_KEYWORD_FALLBACK" if rationale else "NOT_CLASSIFIED"
+    return basis_type, score, source, database_type
+
+
+def _verifiability(rationale: str, basis_type: str) -> str:
+    if not rationale:
+        return "UNVERIFIABLE"
+    if basis_type in {"INTUITION_SOCIAL", "EMOTION"}:
+        return "AMBIGUOUS"
+    if basis_type in {"FUNDAMENTAL", "TECHNICAL", "EVENT", "NEWS"}:
+        return "VERIFIABLE"
+    return "AMBIGUOUS"
+
+
 def _confidence_label(score: int) -> str:
     if score <= 30:
         return "매우 부족"
@@ -217,6 +290,79 @@ def _explicit_principle_match(rule_schema: dict, dotted_path: str) -> Optional[d
         if dotted_path.lower() in mapped or leaf in mapped:
             return item
     return None
+
+
+def _applicable_explicit_principle(
+    rule_schema: dict,
+    action: str,
+    required_sections: Optional[tuple[str, ...]] = None,
+) -> Optional[dict]:
+    audit = rule_schema.get("audit") if isinstance(rule_schema, dict) else {}
+    interpreted = audit.get("interpreted_principles", []) if isinstance(audit, dict) else []
+    sections = required_sections or (
+        ("entry.", "universe.", "selection.", "portfolio.", "additional_buy.")
+        if action in {"BUY", "ADD"}
+        else ("exit.", "rebalance.")
+    )
+    for item in interpreted:
+        if not isinstance(item, dict) or str(item.get("status") or "CONFIRMED") != "CONFIRMED":
+            continue
+        mapped = str(item.get("ai_mapped_rule") or item.get("mappedRule") or "").lower()
+        if mapped.startswith(sections):
+            return item
+    return None
+
+
+def _principle_payload(
+    explicit: Optional[dict],
+    config: Optional[dict],
+    bot_action: str,
+) -> Optional[dict]:
+    if explicit:
+        mapped_rule = str(
+            explicit.get("ai_mapped_rule")
+            or explicit.get("mappedRule")
+            or explicit.get("field")
+            or (config or {}).get("targetRule")
+            or ""
+        )
+        original_text = str(
+            explicit.get("user_natural_text")
+            or explicit.get("userNaturalText")
+            or (config or {}).get("description")
+            or ""
+        )
+        return {
+            "principleSetItemId": explicit.get("principle_set_item_id") or explicit.get("principleSetItemId"),
+            "title": (config or {}).get("title") or original_text or "사용자 원칙",
+            "originalText": original_text,
+            "source": "USER_PRINCIPLE",
+            "targetRule": mapped_rule or None,
+            "expectedAction": bot_action,
+        }
+    if config:
+        return {
+            "principleSetItemId": None,
+            "title": config["title"],
+            "originalText": config["description"],
+            "source": "SUGGESTED_PATTERN",
+            "targetRule": config["targetRule"],
+            "expectedAction": bot_action,
+        }
+    return None
+
+
+def _principle_feedback(judgment: str, principle: Optional[dict], bot_action: str) -> str:
+    title = (principle or {}).get("title") or "개인 원칙봇의 판단"
+    if judgment == "FOLLOWED":
+        return f"'{title}' 원칙에 맞게 행동했어요. 정한 원칙을 제대로 지켰습니다."
+    if judgment == "VIOLATED":
+        return f"'{title}' 원칙대로라면 이 시점에는 {bot_action} 판단을 먼저 따랐어야 해요."
+    if judgment == "DECISION_DIFFERENCE":
+        return "명시적인 사용자 원칙 위반은 확인되지 않았지만 개인 원칙봇과 다른 판단을 했어요."
+    if judgment == "INSUFFICIENT_DATA":
+        return "원칙 준수 여부를 판단할 데이터가 부족합니다."
+    return "이 거래에 직접 연결할 수 있는 명시적인 사용자 원칙이 없습니다."
 
 
 def _fallback_proposed_value(config: dict, current_value):
@@ -299,13 +445,6 @@ class DeterministicReportAnalyzer:
                 prices_by_security[security_id].append((price_date, close_price))
         for series in prices_by_security.values():
             series.sort(key=lambda item: item[0])
-        trades_by_key: Dict[tuple[str, int], List[dict]] = {}
-        trades_by_id = {}
-        for trade in actual_trades:
-            key = (_trade_date(trade), int(trade.get("securityId") or trade.get("security_id") or 0))
-            trades_by_key.setdefault(key, []).append(trade)
-            trades_by_id[_trade_id(trade)] = trade
-
         pattern_by_trade_id: Dict[object, List[str]] = {}
         pattern_by_security: Dict[int, List[str]] = {}
         patterns = analytics.get("behaviorPatterns") or []
@@ -317,54 +456,84 @@ class DeterministicReportAnalyzer:
                 security_id = int(evidence.get("securityId") or 0)
                 pattern_by_security.setdefault(security_id, []).append(code)
 
+        personal_actions_by_key: Dict[tuple[str, int], List[str]] = defaultdict(list)
+        for trade in simulated_trades:
+            if _variant_id(trade) != 2:
+                continue
+            key = (_trade_date(trade), int(trade.get("securityId") or trade.get("security_id") or 0))
+            personal_actions_by_key[key].append(str(trade.get("tradeSide") or "HOLD"))
+        moment_by_key = {
+            (str(item.get("date") or "")[:10], int(item.get("securityId") or 0)): item
+            for item in analytics.get("divergenceMoments") or []
+        }
+        compliance_by_trade = {
+            item.get("tradeId"): item
+            for item in (analytics.get("actualPrincipleCompliance") or {}).get("violations", [])
+        }
+        rule_schema = analytics.get("ruleSchema") or {}
+
         decision_reviews = []
-        # A single actual fill can be associated with more than one divergence
-        # moment (for example, through the three-day fallback match below).
-        # The review is trade-centric, so retain only one review per trade.
-        reviewed_trade_ids = set()
-        for moment in analytics.get("divergenceMoments") or []:
-            date = str(moment.get("date") or "")[:10]
-            security_id = int(moment.get("securityId") or 0)
-            actual_actions = moment.get("actualUserActions") or ["HOLD"]
-            bot_actions = moment.get("personalBotActions") or ["HOLD"]
-            action = str(actual_actions[0])
-            if action not in {"BUY", "ADD", "SELL", "REDUCE"}:
-                continue
-            trade = next(
-                (item for item in trades_by_key.get((date, security_id), []) if item.get("tradeSide") == action),
-                None,
-            )
-            if trade is None:
-                same_action_trades = [
-                    item for item in actual_trades
-                    if int(item.get("securityId") or item.get("security_id") or 0) == security_id
-                    and str(item.get("tradeSide") or "") == action
-                ]
-                nearest_trade = min(
-                    same_action_trades,
-                    key=lambda item: _date_distance(_trade_date(item), date),
-                    default=None,
-                )
-                if nearest_trade is not None and _date_distance(_trade_date(nearest_trade), date) <= 3:
-                    trade = nearest_trade
-            if trade is None:
-                continue
+        for trade in actual_trades:
             trade_id = _trade_id(trade)
-            if trade_id in reviewed_trade_ids:
-                continue
+            security_id = int(trade.get("securityId") or trade.get("security_id") or 0)
+            trade_date = _trade_date(trade)
+            action = str(trade.get("tradeSide") or "HOLD")
+            key = (trade_date, security_id)
+            moment = moment_by_key.get(key, {})
+            if not moment:
+                nearby_moments = [
+                    item for (moment_date, moment_security_id), item in moment_by_key.items()
+                    if moment_security_id == security_id
+                    and action in (item.get("actualUserActions") or [])
+                    and _date_distance(moment_date, trade_date) <= 3
+                ]
+                moment = min(
+                    nearby_moments,
+                    key=lambda item: _date_distance(str(item.get("date") or "")[:10], trade_date),
+                    default={},
+                )
+            bot_actions = personal_actions_by_key.get(key) or moment.get("personalBotActions") or ["HOLD"]
+            bot_action = str(bot_actions[0])
             codes = list(pattern_by_trade_id.get(trade_id, []))
             codes.extend(pattern_by_security.get(security_id, []))
+            codes.extend((compliance_by_trade.get(trade_id) or {}).get("reasonCodes") or [])
+            if action != bot_action:
+                codes.append("ACTUAL_BOT_ACTION_DIVERGENCE")
+
+            outcome_5d = _future_price_outcome(trade, prices_by_security, 5)
+            outcome_20d = _future_price_outcome(trade, prices_by_security, 20)
             subsequent = moment.get("subsequent5TradingDayReturnPercent")
-            subsequent = round(float(subsequent), 2) if subsequent is not None else None
-            if subsequent is None:
-                subsequent = _five_day_return(trade, prices_by_security)
-            rationale = _clean_rationale(trade)
-            recorded_rationale = rationale or "사용자가 입력한 매매 근거 없음"
+            if subsequent is not None:
+                subsequent = round(float(subsequent), 2)
+                outcome_5d["returnPercent"] = subsequent
+            else:
+                subsequent = outcome_5d["returnPercent"]
 
             matched_code = next((code for code in PATTERN_CONFIG if code in codes), None)
-            if matched_code:
-                tag = PATTERN_CONFIG[matched_code]["tag"]
-                label = PATTERN_CONFIG[matched_code]["label"]
+            config = PATTERN_CONFIG.get(matched_code or "")
+            compliance_codes = set((compliance_by_trade.get(trade_id) or {}).get("reasonCodes") or [])
+            if config:
+                explicit = _explicit_principle_match(rule_schema, config["targetRule"])
+            elif action == bot_action:
+                explicit = _applicable_explicit_principle(rule_schema, action)
+            elif "ENTRY_RULE_VIOLATED" in compliance_codes:
+                explicit = _applicable_explicit_principle(rule_schema, action, ("entry.",))
+            elif "UNIVERSE_RULE_VIOLATED" in compliance_codes:
+                explicit = _applicable_explicit_principle(rule_schema, action, ("universe.",))
+            else:
+                explicit = None
+            principle = _principle_payload(explicit, config, bot_action)
+            if explicit:
+                principle_judgment = "FOLLOWED" if action == bot_action else "VIOLATED"
+            elif action != bot_action:
+                principle_judgment = "DECISION_DIFFERENCE"
+            else:
+                principle_judgment = "NOT_APPLICABLE"
+
+            if config:
+                tag, label = config["tag"], config["label"]
+            elif principle_judgment == "FOLLOWED":
+                tag, label = "PRINCIPLE_FOLLOWED", "원칙 준수"
             elif action in {"SELL", "REDUCE"} and subsequent is not None and subsequent > 0:
                 tag, label = "EARLY_SELL", "조기 매도 가능성"
                 codes.append("POSITIVE_POST_SELL_RETURN")
@@ -373,13 +542,17 @@ class DeterministicReportAnalyzer:
                 codes.append("NEGATIVE_POST_BUY_RETURN")
             else:
                 tag, label = "RULE_DIVERGENCE", "원칙봇과 다른 결정"
-                codes.append("ACTUAL_BOT_ACTION_DIVERGENCE")
 
-            bot_action = str(bot_actions[0])
-            feedback = f"실제 매매 근거: {recorded_rationale}. 결과: {_outcome_text(action, subsequent)}."
+            market_5d = _directional_outcome(action, outcome_5d["returnPercent"])
+            market_20d = _directional_outcome(action, outcome_20d["returnPercent"])
+            recorded_rationale = _clean_rationale(trade) or "사용자가 입력한 매매 근거 없음"
+            feedback = (
+                f"{_principle_feedback(principle_judgment, principle, bot_action)} "
+                f"실제 매매 근거: {recorded_rationale}. 결과: {_outcome_text(action, subsequent)}."
+            )
             decision_reviews.append({
                 "tradeId": trade_id,
-                "tradedAt": trade.get("tradedAt") or date,
+                "tradedAt": trade.get("tradedAt") or trade_date,
                 "securityId": security_id,
                 "securityName": trade.get("securityName") or trade.get("security_name") or f"종목 {security_id}",
                 "action": action,
@@ -390,9 +563,21 @@ class DeterministicReportAnalyzer:
                 "subsequentReturnPercent": subsequent,
                 "returnPercent": subsequent,
                 "principleBotAction": bot_action,
+                "principleJudgment": principle_judgment,
+                "matchedPrinciple": principle,
                 "principleFeedback": feedback,
                 "trade": _trade_snapshot(trade),
                 "principleReview": _principle_review(action, bot_action, matched_code, sorted(set(codes))),
+                "marketOutcome": {
+                    "return5dPercent": outcome_5d["returnPercent"],
+                    "return20dPercent": outcome_20d["returnPercent"],
+                    "outcome5d": market_5d,
+                    "outcome20d": market_20d,
+                    "fiveTradingDays": outcome_5d,
+                    "twentyTradingDays": outcome_20d,
+                    "calculationSource": "SECURITY_DAILY_PRICES",
+                },
+                "reviewCase": _review_case(principle_judgment, market_5d),
                 "outcome": {
                     "measurementPeriod": "5_TRADING_DAYS_AFTER_EXECUTION",
                     "priceReturnPercent": subsequent,
@@ -401,122 +586,96 @@ class DeterministicReportAnalyzer:
                 "classificationSource": "DETERMINISTIC_RULE_ENGINE",
                 "evidenceCodes": sorted(set(codes)),
             })
-            reviewed_trade_ids.add(trade_id)
 
-        for pattern in patterns:
-            code = str(pattern.get("patternCode") or "")
-            config = PATTERN_CONFIG.get(code)
-            if not config:
-                continue
-            candidate_trades = [
-                trades_by_id.get(trade_id)
-                for trade_id in pattern.get("evidenceTradeIds") or []
-            ]
-            if code == "DELAYED_STOP_LOSS":
-                for evidence in pattern.get("evidence") or []:
-                    security_id = int(evidence.get("securityId") or 0)
-                    sells = [
-                        trade for trade in actual_trades
-                        if int(trade.get("securityId") or trade.get("security_id") or 0) == security_id
-                        and trade.get("tradeSide") in {"SELL", "REDUCE"}
-                    ]
-                    if sells:
-                        candidate_trades.append(max(sells, key=_trade_date))
-            for trade in candidate_trades:
-                if not trade or _trade_id(trade) in reviewed_trade_ids:
-                    continue
-                trade_id = _trade_id(trade)
-                security_id = int(trade.get("securityId") or trade.get("security_id") or 0)
-                action = str(trade.get("tradeSide") or "HOLD")
-                subsequent = _five_day_return(trade, prices_by_security)
-                recorded_rationale = _clean_rationale(trade) or "사용자가 입력한 매매 근거 없음"
-                decision_reviews.append({
-                    "tradeId": trade_id,
-                    "tradedAt": trade.get("tradedAt") or _trade_date(trade),
-                    "securityId": security_id,
-                    "securityName": trade.get("securityName") or trade.get("security_name") or f"종목 {security_id}",
-                    "action": action,
-                    "actionSummary": action,
-                    "decisionReason": recorded_rationale,
-                    "emotionTag": config["tag"],
-                    "emotionLabel": config["label"],
-                    "subsequentReturnPercent": subsequent,
-                    "returnPercent": subsequent,
-                    "principleBotAction": "NOT_COMPARED",
-                    "principleFeedback": (
-                        f"실제 매매 근거: {recorded_rationale}. "
-                        f"결과: {_outcome_text(action, subsequent)}."
-                    ),
-                    "trade": _trade_snapshot(trade),
-                    "principleReview": _principle_review(action, "NOT_COMPARED", code, [code]),
-                    "outcome": {
-                        "measurementPeriod": "5_TRADING_DAYS_AFTER_EXECUTION",
-                        "priceReturnPercent": subsequent,
-                        "summary": _outcome_text(action, subsequent),
-                    },
-                    "classificationSource": "DETERMINISTIC_RULE_ENGINE",
-                    "evidenceCodes": [code],
-                })
-                reviewed_trade_ids.add(trade_id)
-
-        decision_reviews.sort(
+        decision_reviews.sort(key=lambda item: str(item.get("tradedAt") or ""), reverse=True)
+        key_trade_reviews = sorted(
+            decision_reviews,
             key=lambda item: (
+                item.get("decisionReason") != "사용자가 입력한 매매 근거 없음",
                 item.get("subsequentReturnPercent") is not None,
                 abs(float(item.get("subsequentReturnPercent") or 0.0)),
                 str(item.get("tradedAt") or ""),
             ),
             reverse=True,
-        )
-        decision_reviews = [
-            item for item in decision_reviews
-            if item.get("subsequentReturnPercent") is not None
-        ][:3]
+        )[:3]
+        key_trade_ids = {item.get("tradeId") for item in key_trade_reviews}
+        decision_by_trade_id = {item.get("tradeId"): item for item in decision_reviews}
 
         evidence_reviews = []
-        evidence_candidates = [
-            (decision, trades_by_id.get(decision.get("tradeId")))
-            for decision in decision_reviews
-        ]
-        selected_trade_ids = {decision.get("tradeId") for decision in decision_reviews}
-        supplemental_trades = []
         for trade in actual_trades:
-            if _trade_id(trade) in selected_trade_ids:
-                continue
-            subsequent = _five_day_return(trade, prices_by_security)
-            if subsequent is not None:
-                supplemental_trades.append((abs(subsequent), subsequent, trade))
-        supplemental_trades.sort(key=lambda item: (item[0], _trade_date(item[2])), reverse=True)
-        for _, subsequent, trade in supplemental_trades:
-            if len(evidence_candidates) >= 3:
-                break
-            evidence_candidates.append(({"subsequentReturnPercent": subsequent}, trade))
-            selected_trade_ids.add(_trade_id(trade))
-
-        for decision, trade in evidence_candidates:
-            if not trade:
-                continue
             trade_id = _trade_id(trade)
+            decision = decision_by_trade_id.get(trade_id, {})
             rationale = _clean_rationale(trade)
-            basis_type, score = _classify_basis(rationale)
+            basis_type, score, basis_source, database_type = _basis_classification(trade, rationale)
             action = str(trade.get("tradeSide") or "HOLD")
             security_name = trade.get("securityName") or trade.get("security_name") or "종목"
-            subsequent = decision.get("subsequentReturnPercent")
-            if subsequent is None:
-                subsequent = _five_day_return(trade, prices_by_security)
             evidence_reviews.append({
                 "tradeId": trade_id,
                 "tradedAt": trade.get("tradedAt") or _trade_date(trade),
                 "securityId": int(trade.get("securityId") or trade.get("security_id") or 0),
                 "securityName": security_name,
                 "action": f"{security_name} {action}",
+                "tradeAction": action,
                 "basis": rationale or "사용자가 입력한 매매 근거 없음",
                 "basisType": basis_type,
-                "result": _outcome_text(action, subsequent),
-                "returnPercent": subsequent,
+                "databaseBasisType": database_type,
+                "basisTypeSource": basis_source,
+                "verifiability": _verifiability(rationale, basis_type),
+                "webVerdict": (
+                    "PENDING" if rationale and trade_id in key_trade_ids
+                    else "NOT_SELECTED" if rationale
+                    else "UNCONFIRMED"
+                ),
+                "result": _outcome_text(action, decision.get("subsequentReturnPercent")),
+                "returnPercent": decision.get("subsequentReturnPercent"),
+                "marketOutcome": decision.get("marketOutcome", {}),
                 "confidenceScore": score,
                 "confidenceLabel": _confidence_label(score),
-                "classificationSource": "DETERMINISTIC_KEYWORD_RULE",
+                "classificationSource": basis_source,
             })
+        evidence_reviews.sort(key=lambda item: str(item.get("tradedAt") or ""), reverse=True)
+
+        security_evidence_reviews = []
+        actual_security_ids = sorted({int(item.get("securityId") or item.get("security_id") or 0) for item in actual_trades})
+        for security_id in actual_security_ids:
+            security_trades = [item for item in evidence_reviews if item["securityId"] == security_id]
+            price_series = [
+                {"date": price_date, "closePrice": close_price}
+                for price_date, close_price in prices_by_security.get(security_id, [])
+            ]
+            annotations = []
+            for review in [item for item in decision_reviews if item["securityId"] == security_id]:
+                annotations.append({
+                    "date": str(review.get("tradedAt") or "")[:10],
+                    "type": review["action"],
+                    "tradeId": review["tradeId"],
+                    "label": "매수" if review["action"] in {"BUY", "ADD"} else "매도",
+                })
+                for period_key, label in (("fiveTradingDays", "5거래일 평가"), ("twentyTradingDays", "20거래일 평가")):
+                    point = review.get("marketOutcome", {}).get(period_key, {})
+                    if point.get("evaluationDate"):
+                        annotations.append({
+                            "date": point["evaluationDate"],
+                            "type": "OUTCOME_CHECKPOINT",
+                            "tradeId": review["tradeId"],
+                            "label": label,
+                        })
+            security_evidence_reviews.append({
+                "securityId": security_id,
+                "securityName": security_trades[0]["securityName"] if security_trades else f"종목 {security_id}",
+                "evidenceReviews": security_trades,
+                "priceSeries": price_series,
+                "chartAnnotations": sorted(annotations, key=lambda item: (item["date"], str(item.get("tradeId") or ""))),
+            })
+
+        principle_review_summary = {
+            "followedCount": sum(item["principleJudgment"] == "FOLLOWED" for item in decision_reviews),
+            "violatedCount": sum(item["principleJudgment"] == "VIOLATED" for item in decision_reviews),
+            "decisionDifferenceCount": sum(item["principleJudgment"] == "DECISION_DIFFERENCE" for item in decision_reviews),
+            "unassessedCount": sum(item["principleJudgment"] in {"NOT_APPLICABLE", "INSUFFICIENT_DATA"} for item in decision_reviews),
+            "assessedTradeCount": sum(item["principleJudgment"] in {"FOLLOWED", "VIOLATED"} for item in decision_reviews),
+            "totalTradeCount": len(decision_reviews),
+        }
 
         actual_return = _participant_return(participant_summary, "ACTUAL_USER", 1)
         principle_return = _participant_return(participant_summary, "PERSONAL_BOT", 2)
@@ -536,7 +695,7 @@ class DeterministicReportAnalyzer:
         )
         learning_insights = {
             "primaryMistakePattern": primary_text,
-            "emotionalTradeCount": sum(item["emotionTag"] != "RULE_DIVERGENCE" for item in decision_reviews),
+            "emotionalTradeCount": sum(item["emotionTag"] in PATTERN_CONFIG for item in decision_reviews),
             "underperformedTradeCount": underperformed,
             "actualReturnPercent": actual_return,
             "principleReturnPercent": principle_return,
@@ -558,7 +717,6 @@ class DeterministicReportAnalyzer:
             for trade in actual_trades
         )
 
-        rule_schema = analytics.get("ruleSchema") or {}
         principle_discoveries = []
         principle_reinforcements = []
         improvement_actions = []
@@ -629,10 +787,12 @@ class DeterministicReportAnalyzer:
             })
 
         return {
-            "reportVersion": "DETERMINISTIC_V11",
+            "reportVersion": "DETERMINISTIC_V12",
+            "principleReviewSummary": principle_review_summary,
             "decisionReviews": decision_reviews,
-            "keyTradeReviews": decision_reviews,
+            "keyTradeReviews": key_trade_reviews,
             "evidenceReviews": evidence_reviews,
+            "securityEvidenceReviews": security_evidence_reviews,
             "learningInsights": learning_insights,
             "principleDiscoveries": principle_discoveries,
             "principleReinforcements": principle_reinforcements,

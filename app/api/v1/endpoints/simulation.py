@@ -962,7 +962,7 @@ def get_simulation_detail(simulation_id: int):
 def get_simulation_report(simulation_id: int, background_tasks: BackgroundTasks):
     """
     [대응 화면: 리포트 탭 / 결과 복기]
-    - 백테스트 실행 내역 기반 감정 복기(decisionReviews), 근거 검증(evidenceReviews),
+    - 백테스트 실행 내역 기반 원칙 준수 복기(decisionReviews), 근거 검증(evidenceReviews),
       학습 인사이트(learningInsights), 추천 원칙(recommendedPrinciples), 개선 행동 조치를 종합 반환합니다.
     """
     try:

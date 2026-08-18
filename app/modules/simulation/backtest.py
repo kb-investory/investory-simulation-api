@@ -323,6 +323,7 @@ class BacktestEngine:
                         execution_policy=order.execution_policy,
                         original_traded_at=order.original_traded_at,
                         applied_trading_date=execution_date,
+                        rationale_label_type=order.rationale_label_type,
                     )
                 )
                 self._record_order_audit(
@@ -378,6 +379,7 @@ class BacktestEngine:
                         execution_policy=order.execution_policy,
                         original_traded_at=order.original_traded_at,
                         applied_trading_date=execution_date,
+                        rationale_label_type=order.rationale_label_type,
                     )
                 )
                 status = "ADJUSTED" if sell_qty < order.quantity else "EXECUTED"

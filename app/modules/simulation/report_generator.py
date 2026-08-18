@@ -17,6 +17,7 @@ from typing import List, Optional
 
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
 from app.modules.simulation.report_analysis import DeterministicReportAnalyzer
+from app.modules.simulation.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 class SimulationReportGenerator:
     """시뮬레이션 백테스트 및 실제 매매 내역 기반 리포트 생성기"""
 
-    REPORT_VERSION = "DETERMINISTIC_V11"
+    REPORT_VERSION = "DETERMINISTIC_V12"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
@@ -109,6 +110,7 @@ class SimulationReportGenerator:
                 "WEB_SEARCH_NOT_RUN",
                 "웹 검색 검증을 아직 실행하지 못했습니다.",
             )
+        self._sync_evidence_verification(report)
         if not self.api_key or self.api_key.startswith("your_") or len(self.api_key) <= 10:
             report["generationMetadata"]["thesisVerificationStatus"] = "NOT_CONFIGURED"
             return
@@ -126,7 +128,53 @@ class SimulationReportGenerator:
         )
         report["generationMetadata"]["thesisVerificationSource"] = "OPENAI_WEB_SEARCH" if completed else "NONE"
         if completed:
+            self._sync_evidence_verification(report)
             self._apply_thesis_learning_and_principles(report)
+
+    @staticmethod
+    def _sync_evidence_verification(report: dict) -> None:
+        verdict_map = {
+            "REALIZED": "CONFIRMED",
+            "PARTIALLY_REALIZED": "PARTIAL",
+            "NOT_REALIZED": "CONTRADICTED",
+            "UNCONFIRMED": "UNCONFIRMED",
+        }
+        outcomes_by_trade = {
+            item.get("tradeId"): item.get("thesisOutcome", {})
+            for item in report.get("keyTradeReviews", [])
+        }
+        for evidence in report.get("evidenceReviews", []):
+            outcome = outcomes_by_trade.get(evidence.get("tradeId"))
+            if not outcome:
+                continue
+            evidence["webVerdict"] = verdict_map.get(outcome.get("verdict"), "UNCONFIRMED")
+            evidence["webVerification"] = outcome
+
+        for security in report.get("securityEvidenceReviews", []):
+            annotations = security.setdefault("chartAnnotations", [])
+            seen = {
+                (item.get("date"), item.get("type"), item.get("tradeId"), item.get("sourceUrl"))
+                for item in annotations
+            }
+            for evidence in security.get("evidenceReviews", []):
+                outcome = outcomes_by_trade.get(evidence.get("tradeId")) or {}
+                for claim in outcome.get("claimResults") or []:
+                    for source in claim.get("sources") or []:
+                        published_at = str(source.get("publishedAt") or "")[:10]
+                        if not published_at:
+                            continue
+                        marker = {
+                            "date": published_at,
+                            "type": "EVIDENCE_EVENT",
+                            "tradeId": evidence.get("tradeId"),
+                            "label": str(source.get("title") or claim.get("claim") or "근거 자료"),
+                            "sourceUrl": source.get("url"),
+                        }
+                        key = (marker["date"], marker["type"], marker["tradeId"], marker["sourceUrl"])
+                        if key not in seen:
+                            annotations.append(marker)
+                            seen.add(key)
+            annotations.sort(key=lambda item: (str(item.get("date") or ""), str(item.get("tradeId") or "")))
 
     @staticmethod
     def _apply_thesis_learning_and_principles(report: dict) -> None:
@@ -208,93 +256,11 @@ class SimulationReportGenerator:
         rationale = str(review.get("decisionReason") or "").strip()
         if not rationale or rationale == "사용자가 입력한 매매 근거 없음":
             return self._unconfirmed_thesis_outcome("NO_RECORDED_RATIONALE", "기록된 매매 근거가 없어 검증할 수 없습니다.")
-        prompt = f"""당신은 투자 기록의 사후 근거 검증기다. 웹 검색으로 아래 거래 근거가 거래일 이후 실제로 실현됐는지만 판정한다.
-주가 수익률은 근거 실현 판정에 사용하지 마라. 예측·의견·루머를 사실로 취급하지 말고, 회사 공시·실적 발표·회사 IR·신뢰 가능한 보도처럼 검증 가능한 자료를 우선한다.
-
-거래: {review.get('securityName')} {review.get('action')}, 거래일 {str(review.get('tradedAt') or '')[:10]}
-사용자 근거: {rationale}
-검색 기준일: {date.today().isoformat()}
-
-반드시 JSON만 반환한다. verdict는 REALIZED, PARTIALLY_REALIZED, NOT_REALIZED, UNCONFIRMED 중 하나다.
-claimResults의 status도 동일한 네 값 중 하나이고, sources는 실제로 확인한 URL만 넣는다.
-{{
-  "verdict":"REALIZED",
-  "verdictLabel":"근거 실현",
-  "summary":"간결한 한국어 판정",
-  "claimResults":[{{"claim":"근거에서 분리한 주장","status":"REALIZED","evidence":"확인된 사실","sources":[{{"title":"자료 제목","publisher":"발행처","publishedAt":"YYYY-MM-DD 또는 null","url":"https://..."}}]}}]
-}}"""
-        schema = {
-            "type": "json_schema",
-            "name": "thesis_outcome",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["verdict", "verdictLabel", "summary", "claimResults"],
-                "properties": {
-                    "verdict": {"type": "string", "enum": ["REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"]},
-                    "verdictLabel": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "claimResults": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "required": ["claim", "status", "evidence", "sources"],
-                            "properties": {
-                                "claim": {"type": "string"},
-                                "status": {"type": "string", "enum": ["REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"]},
-                                "evidence": {"type": "string"},
-                                "sources": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "additionalProperties": False,
-                                        "required": ["title", "publisher", "publishedAt", "url"],
-                                        "properties": {
-                                            "title": {"type": "string"},
-                                            "publisher": {"type": "string"},
-                                            "publishedAt": {"type": ["string", "null"]},
-                                            "url": {"type": "string"},
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                },
-            },
-        }
-        payload = json.dumps({
-            "model": self.thesis_model,
-            "tools": [{"type": "web_search"}],
-            "input": prompt,
-            "text": {"format": schema},
-        }).encode("utf-8")
-        request = urllib.request.Request(
-            "https://api.openai.com/v1/responses",
-            data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
-        )
-        with urllib.request.urlopen(request, timeout=settings.LLM_TIMEOUT) as response:
-            raw = json.loads(response.read().decode("utf-8"))
-        output_text = raw.get("output_text")
-        if not output_text:
-            output_text = next((content.get("text") for item in raw.get("output", []) for content in item.get("content", []) if content.get("type") == "output_text"), None)
-        parsed = json.loads(output_text or "")
-        if not isinstance(parsed, dict) or parsed.get("verdict") not in {"REALIZED", "PARTIALLY_REALIZED", "NOT_REALIZED", "UNCONFIRMED"}:
-            raise ValueError("Invalid thesis verification response")
-        claims = parsed.get("claimResults") if isinstance(parsed.get("claimResults"), list) else []
-        source_count = sum(len(item.get("sources") or []) for item in claims if isinstance(item, dict))
-        return {
-            "verdict": parsed["verdict"],
-            "verdictLabel": str(parsed.get("verdictLabel") or parsed["verdict"]),
-            "summary": str(parsed.get("summary") or ""),
-            "checkedUntil": date.today().isoformat(),
-            "claimResults": claims,
-            "sourceCount": source_count,
-            "verificationStatus": "COMPLETED",
-        }
+        checked_until = date.today().isoformat()
+        search_agent = EvidenceSearchAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
+        judgment_agent = EvidenceJudgmentAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
+        dossier = search_agent.search(review, checked_until)
+        return judgment_agent.judge(review, dossier, checked_until)
 
     def _call_llm_for_narratives(self, report: dict) -> Optional[dict]:
         """Ask OpenAI only for prose; all classifications and numbers are immutable."""

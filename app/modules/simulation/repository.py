@@ -285,7 +285,7 @@ class SimulationRepository:
                     SELECT t.trade_id, t.security_id, s.security_code, s.security_name,
                            t.trade_side, t.quantity, t.unit_price,
                            t.transaction_cost_amount, t.traded_at,
-                           note.rationale_text
+                           note.rationale_text, note.rationale_label_type
                     FROM trades t
                     JOIN securities s ON s.security_id = t.security_id
                     LEFT JOIN journal_trade_notes note ON note.trade_id = t.trade_id
@@ -311,6 +311,7 @@ class SimulationRepository:
                 "transactionCostAmount": float(row[7] or 0.0),
                 "tradedAt": _datetime_text(row[8]),
                 "rationaleText": row[9] or "",
+                "rationaleLabelType": row[10] or "UNCLASSIFIED",
             }
             for row in rows
         ]

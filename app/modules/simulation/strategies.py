@@ -156,6 +156,7 @@ class ActualUserStrategy(BaseStrategy):
                         execution_policy="DATABASE_ACTUAL_FILL",
                         transaction_cost_amount=float(trade.get("transactionCostAmount", 0.0)),
                         original_traded_at=trade.get("tradedAt"),
+                        rationale_label_type=str(trade.get("rationaleLabelType") or "UNCLASSIFIED"),
                     )
                 )
         return orders

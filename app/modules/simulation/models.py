@@ -96,6 +96,7 @@ class VirtualOrder:
     original_traded_at: Optional[str] = None
     reason_codes: List[str] = field(default_factory=list)
     target_weight: Optional[float] = None
+    rationale_label_type: str = "UNCLASSIFIED"
 
 @dataclass
 class SimulatedTrade:
@@ -115,6 +116,7 @@ class SimulatedTrade:
     execution_policy: str = "NEXT_TRADING_DAY_OPEN"
     original_traded_at: Optional[str] = None
     applied_trading_date: Optional[str] = None
+    rationale_label_type: str = "UNCLASSIFIED"
 
 @dataclass
 class DailySnapshot:

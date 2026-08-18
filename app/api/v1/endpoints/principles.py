@@ -70,7 +70,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
-    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11"}:
+    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11", "DETERMINISTIC_V12"}:
         raise HTTPException(status_code=409, detail="새 분석 버전의 리포트를 먼저 조회해 주세요.")
     proposals = (
         report.get("principleDiscoveries", [])
