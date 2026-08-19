@@ -5,7 +5,7 @@
 ■ 전체 기능 설명:
   - 백테스트 실행 데이터(실제 사용자 매매, 원칙 봇 매매, 일별 성과)를 종합 분석하여
     감정 복기(decisionReviews), 근거 검증(evidenceReviews), 학습 인사이트(learningInsights),
-    추천 원칙(recommendedPrinciples), 개선 행동 조치(improvementActions) 리포트를 산출하는 모듈입니다.
+    기존 원칙 평가(principleEvaluations)와 검증된 강화안 리포트를 산출하는 모듈입니다.
 ================================================================================
 """
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class SimulationReportGenerator:
     """시뮬레이션 백테스트 및 실제 매매 내역 기반 리포트 생성기"""
 
-    REPORT_VERSION = "DETERMINISTIC_V12"
+    REPORT_VERSION = "DETERMINISTIC_V13"
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
@@ -76,8 +76,7 @@ class SimulationReportGenerator:
                 "OPENAI" if merged_count else "TEMPLATE_FALLBACK"
             )
             proposal_items = (
-                report.get("principleDiscoveries", [])
-                + report.get("principleReinforcements", [])
+                report.get("principleReinforcements", [])
             )
             report["generationMetadata"]["proposalSource"] = (
                 "OPENAI_VALIDATED"
@@ -204,41 +203,8 @@ class SimulationReportGenerator:
         )
         insight["thesisNarrative"] = thesis_text
         insight["narrative"] = f"{insight.get('narrative', '')} {thesis_text}".strip()
-        if not_realized + partial < 2:
-            return
-        proposal = {
-            "recommendationId": 3001,
-            "opportunityId": "THESIS_VALIDATION:audit.pre_trade_thesis_validation",
-            "recommendationCode": "THESIS_VALIDATION",
-            "proposalType": "DISCOVERY",
-            "principleType": "EVIDENCE_DISCIPLINE",
-            "title": "매수 전 투자 근거와 확인 시점 기록",
-            "description": "매수·매도 전 핵심 근거와 그 근거가 확인될 공시·실적·이벤트 시점을 기록하고, 사후에 실현 여부를 점검한다.",
-            "targetRule": "audit.pre_trade_thesis_validation",
-            "currentValue": None,
-            "sourcePrincipleText": None,
-            "proposedValue": True,
-            "allowedMinimum": True,
-            "allowedMaximum": True,
-            "strengthDirection": "ENABLE",
-            "changeType": "NEW_RULE",
-            "ruleJson": {"audit": {"pre_trade_thesis_validation": True}},
-            "evidence": {"assessedTradeCount": total, "partiallyRealizedTradeCount": partial, "notRealizedTradeCount": not_realized},
-            "judgmentSource": "OPENAI_WEB_SEARCH",
-            "proposalSource": "OPENAI_WEB_SEARCH",
-        }
-        discoveries = report.setdefault("principleDiscoveries", [])
-        if not any(item.get("recommendationCode") == "THESIS_VALIDATION" for item in discoveries):
-            discoveries.append(proposal)
-            report["recommendedPrinciples"] = discoveries + report.get("principleReinforcements", [])
-        actions = report.setdefault("improvementActions", [])
-        if not any(item.get("category") == "EVIDENCE_DISCIPLINE" for item in actions):
-            actions.append({
-                "category": "EVIDENCE_DISCIPLINE",
-                "title": "투자 근거 사후 점검",
-                "action": "각 매매 근거에 확인 시점을 기록하고, 결과 발표 후 근거가 실제로 실현됐는지 점검합니다.",
-                "judgmentSource": "OPENAI_WEB_SEARCH",
-            })
+        # Evidence verification enriches the evaluation context only. It must
+        # not invent a new principle or a separate "good action" checklist.
 
     @staticmethod
     def _unconfirmed_thesis_outcome(status: str, summary: str) -> dict:
@@ -269,6 +235,8 @@ class SimulationReportGenerator:
             "decisionReviews": report.get("decisionReviews", [])[:20],
             "evidenceReviews": report.get("evidenceReviews", [])[:20],
             "learningInsights": report.get("learningInsights", {}),
+            "principleEvaluationSummary": report.get("principleEvaluationSummary", {}),
+            "principleEvaluations": report.get("principleEvaluations", []),
             "recommendedPrinciples": report.get("recommendedPrinciples", []),
             "principleDiscoveries": report.get("principleDiscoveries", []),
             "principleReinforcements": report.get("principleReinforcements", []),
@@ -347,6 +315,17 @@ class SimulationReportGenerator:
                 item["narrative"] = text
                 merged += 1
 
+        evaluation_text = {
+            str(item.get("evaluationId")): cls._safe_text(item.get("explanation"))
+            for item in narratives.get("principleEvaluationNarratives", [])
+            if isinstance(item, dict)
+        }
+        for item in report.get("principleEvaluations", []):
+            text = evaluation_text.get(str(item.get("evaluationId")))
+            if text:
+                item["narrative"] = text
+                merged += 1
+
         recommendation_text = {
             str(item.get("recommendationId")): cls._safe_text(item.get("explanation"))
             for item in narratives.get("recommendationNarratives", [])
@@ -375,8 +354,7 @@ class SimulationReportGenerator:
             if isinstance(item, dict)
         }
         proposal_items = (
-            report.get("principleDiscoveries", [])
-            + report.get("principleReinforcements", [])
+            report.get("principleReinforcements", [])
         )
         for item in proposal_items:
             proposal = proposal_text.get(str(item.get("opportunityId")))

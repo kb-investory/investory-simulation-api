@@ -44,6 +44,45 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             ],
         }
 
+    def _reinforcement_inputs(self):
+        trades = self.trades + [{
+            **self.trades[0],
+            "tradeId": 12,
+            "tradedAt": "2026-07-02T09:00:00",
+            "appliedTradingDate": "2026-07-02",
+        }]
+        analytics = dict(self.analytics)
+        analytics["divergenceMoments"] = self.analytics["divergenceMoments"] + [{
+            **self.analytics["divergenceMoments"][0],
+            "date": "2026-07-02",
+        }]
+        analytics["behaviorPatterns"] = [{
+            **self.analytics["behaviorPatterns"][0],
+            "count": 2,
+            "evidenceTradeIds": [11, 12],
+        }]
+        analytics["ruleSchema"] = {
+            "entry": {"max_5day_return": 0.15},
+            "audit": {
+                "interpreted_principles": [{
+                    "user_natural_text": "급등주를 추격매수하지 않는다",
+                    "ai_mapped_rule": "entry.max_5day_return",
+                    "status": "CONFIRMED",
+                }]
+            },
+        }
+        analytics["principleItems"] = [{
+            "principleSetItemId": 9,
+            "principleText": "급등주를 추격매수하지 않는다",
+            "ruleJson": {"entry": {"max_5day_return": 0.15}},
+            "sortOrder": 1,
+        }]
+        analytics["dailyPrices"] = [
+            {"securityId": 7, "priceDate": "2026-07-01", "closePrice": 100.0, "day5Return": 0.20},
+            {"securityId": 7, "priceDate": "2026-07-02", "closePrice": 101.0, "day5Return": 0.20},
+        ]
+        return trades, analytics
+
     def test_all_judgments_and_rule_json_are_deterministic(self):
         report = DeterministicReportAnalyzer().build(
             self.trades,
@@ -51,7 +90,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             self.analytics,
         )
 
-        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V12")
+        self.assertEqual(report["reportVersion"], "DETERMINISTIC_V13")
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
         self.assertEqual(report["evidenceReviews"][0]["basisType"], "UNKNOWN")
         self.assertEqual(report["evidenceReviews"][0]["confidenceScore"], 10)
@@ -60,11 +99,8 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["learningInsights"]["narrativeSource"], "DETERMINISTIC_TEMPLATE")
         self.assertEqual(report["learningInsights"]["principleReturnPercent"], 12.0)
         self.assertEqual(report["learningInsights"]["returnImprovementPercentPoint"], 7.0)
-        self.assertEqual(
-            report["recommendedPrinciples"][0]["ruleJson"],
-            {"entry": {"max_5day_return": 0.10}},
-        )
-        self.assertEqual(report["principleDiscoveries"][0]["proposalType"], "DISCOVERY")
+        self.assertEqual(report["principleEvaluations"], [])
+        self.assertEqual(report["principleDiscoveries"], [])
         self.assertEqual(report["principleReinforcements"], [])
 
     def test_llm_can_only_add_whitelisted_narratives(self):
@@ -106,10 +142,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
         self.assertEqual(report["decisionReviews"][0]["subsequentReturnPercent"], -4.0)
         self.assertEqual(report["learningInsights"]["actualReturnPercent"], 5.0)
-        self.assertEqual(
-            report["recommendedPrinciples"][0]["ruleJson"],
-            {"entry": {"max_5day_return": 0.10}},
-        )
+        self.assertEqual(report["recommendedPrinciples"], [])
         self.assertEqual(report["generationMetadata"]["narrativeSource"], "OPENAI")
         self.assertIn("narrative", report["decisionReviews"][0])
         self.assertIn("실제 매매 근거:", report["decisionReviews"][0]["principleFeedback"])
@@ -144,7 +177,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(enriched["generationMetadata"]["thesisVerificationStatus"], "COMPLETED")
         self.assertEqual(enriched["learningInsights"]["thesisOutcomeSummary"]["realizedTradeCount"], 1)
 
-    def test_unrealized_theses_add_insight_and_evidence_discipline_principle(self):
+    def test_unrealized_theses_add_insight_without_inventing_a_principle(self):
         report = {
             "keyTradeReviews": [
                 {"thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "NOT_REALIZED"}},
@@ -166,9 +199,9 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             "notRealizedTradeCount": 1,
             "source": "OPENAI_WEB_SEARCH",
         })
-        self.assertEqual(report["principleDiscoveries"][0]["recommendationCode"], "THESIS_VALIDATION")
-        self.assertEqual(report["recommendedPrinciples"][0]["targetRule"], "audit.pre_trade_thesis_validation")
-        self.assertEqual(report["improvementActions"][0]["category"], "EVIDENCE_DISCIPLINE")
+        self.assertEqual(report["principleDiscoveries"], [])
+        self.assertEqual(report["recommendedPrinciples"], [])
+        self.assertEqual(report["improvementActions"], [])
 
     def test_deterministic_report_does_not_wait_for_llm(self):
         generator = SimulationReportGenerator(api_key="configured-key")
@@ -352,15 +385,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["decisionReviews"][0]["returnPercent"], -4.25)
 
     def test_existing_explicit_rule_is_reinforced_and_valid_llm_value_is_applied(self):
-        analytics = dict(self.analytics)
-        analytics["ruleSchema"] = {
-            "entry": {"max_5day_return": 0.15},
-            "audit": {
-                "interpreted_principles": [
-                    {"ai_mapped_rule": "entry.max_5day_return", "status": "CONFIRMED"}
-                ]
-            },
-        }
+        trades, analytics = self._reinforcement_inputs()
         generator = SimulationReportGenerator(api_key="configured-key")
         with patch.object(
             generator,
@@ -368,7 +393,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             return_value={
                 "principleProposals": [
                     {
-                        "opportunityId": "FOMO_BUY:entry.max_5day_return",
+                        "opportunityId": "PRINCIPLE:9:entry.max_5day_return",
                         "title": "추격매수 기준 강화",
                         "description": "반복된 패턴을 반영해 진입 기준을 더 명확히 합니다.",
                         "proposedValue": 0.08,
@@ -378,7 +403,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         ):
             report = generator.generate_report(
                 1,
-                self.trades,
+                trades,
                 self.participants,
                 analytics=analytics,
             )
@@ -391,7 +416,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(reinforcement["proposalSource"], "OPENAI_VALIDATED")
         self.assertEqual(report["generationMetadata"]["proposalSource"], "OPENAI_VALIDATED")
 
-    def test_discovered_rule_accepts_only_a_bounded_llm_proposal(self):
+    def test_llm_cannot_create_a_new_principle_from_a_behavior_pattern(self):
         generator = SimulationReportGenerator(api_key="configured-key")
         with patch.object(
             generator,
@@ -399,7 +424,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             return_value={
                 "principleProposals": [
                     {
-                        "opportunityId": "FOMO_BUY:entry.max_5day_return",
+                        "opportunityId": "PRINCIPLE:9:entry.max_5day_return",
                         "title": "급등 종목 진입 보류",
                         "description": "반복된 추격매수 패턴에 적용할 신규 원칙입니다.",
                         "proposedValue": 0.12,
@@ -414,21 +439,11 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 analytics=self.analytics,
             )
 
-        discovery = report["principleDiscoveries"][0]
-        self.assertEqual(discovery["proposedValue"], 0.12)
-        self.assertEqual(discovery["ruleJson"], {"entry": {"max_5day_return": 0.12}})
-        self.assertEqual(discovery["proposalSource"], "OPENAI_VALIDATED")
+        self.assertEqual(report["principleDiscoveries"], [])
+        self.assertEqual(report["recommendedPrinciples"], [])
 
     def test_reinforcement_rejects_a_weaker_llm_threshold(self):
-        analytics = dict(self.analytics)
-        analytics["ruleSchema"] = {
-            "entry": {"max_5day_return": 0.15},
-            "audit": {
-                "interpreted_principles": [
-                    {"ai_mapped_rule": "entry.max_5day_return", "status": "CONFIRMED"}
-                ]
-            },
-        }
+        trades, analytics = self._reinforcement_inputs()
         generator = SimulationReportGenerator(api_key="configured-key")
         with patch.object(
             generator,
@@ -436,7 +451,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             return_value={
                 "principleProposals": [
                     {
-                        "opportunityId": "FOMO_BUY:entry.max_5day_return",
+                        "opportunityId": "PRINCIPLE:9:entry.max_5day_return",
                         "proposedValue": 0.18,
                     }
                 ]
@@ -444,7 +459,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         ):
             report = generator.generate_report(
                 1,
-                self.trades,
+                trades,
                 self.participants,
                 analytics=analytics,
             )
@@ -469,7 +484,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
 
         self.assertEqual(report["generationMetadata"]["narrativeSource"], "TEMPLATE_FALLBACK")
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
-        self.assertTrue(report["recommendedPrinciples"])
+        self.assertEqual(report["recommendedPrinciples"], [])
 
     def test_non_executable_rationale_prompt_is_only_an_improvement_action(self):
         report = DeterministicReportAnalyzer().build(
@@ -479,7 +494,178 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         )
 
         self.assertEqual(report["recommendedPrinciples"], [])
-        self.assertEqual(report["improvementActions"][0]["category"], "EVIDENCE_DISCIPLINE")
+        self.assertEqual(report["improvementActions"], [])
+
+    def test_all_existing_principles_are_evaluated_and_only_repeated_violations_are_strengthened(self):
+        trades, analytics = self._reinforcement_inputs()
+        analytics["principleItems"].append({
+            "principleSetItemId": 10,
+            "principleText": "손실은 10%에서 제한한다",
+            "ruleJson": {"exit": {"stop_loss_rate": -0.10}},
+            "sortOrder": 2,
+        })
+        analytics["ruleSchema"]["exit"] = {"stop_loss_rate": -0.10}
+        analytics["ruleSchema"]["audit"]["interpreted_principles"].append({
+            "user_natural_text": "손실은 10%에서 제한한다",
+            "ai_mapped_rule": "exit.stop_loss_rate",
+            "status": "CONFIRMED",
+        })
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+
+        self.assertEqual(report["principleEvaluationSummary"]["totalCount"], 2)
+        self.assertEqual(report["principleEvaluationSummary"]["strengthenCount"], 1)
+        self.assertEqual(report["principleEvaluationSummary"]["insufficientDataCount"], 1)
+        self.assertEqual(report["principleEvaluations"][0]["verdict"], "STRENGTHEN")
+        self.assertEqual(report["principleEvaluations"][0]["statistics"]["violatedCount"], 2)
+        self.assertEqual(report["principleEvaluations"][0]["suggestion"]["principleSetItemId"], 9)
+        self.assertEqual(report["principleEvaluations"][1]["verdict"], "INSUFFICIENT_DATA")
+
+    def test_comparator_reference_principles_are_secondary_limited_and_non_duplicate(self):
+        participants = self.participants + [{
+            "variantId": 3,
+            "variantType": "FAMOUS_STRATEGY",
+            "cumulativeReturnPercent": 8.5,
+        }]
+        trades = self.trades + [{
+            "tradeId": 31,
+            "variantId": 3,
+            "securityId": 8,
+            "securityName": "비교종목",
+            "tradeSide": "BUY",
+            "tradedAt": "2026-07-03T09:00:00",
+            "appliedTradingDate": "2026-07-03",
+        }]
+        analytics = dict(self.analytics)
+        analytics["ruleSchema"] = {
+            "selection": {
+                "factor_weights": {"value": 0.5, "quality": 0.5},
+                "min_passing_score": 70,
+            },
+            "audit": {
+                "interpreted_principles": [{
+                    "user_natural_text": "가치와 품질을 함께 본다",
+                    "ai_mapped_rule": "selection.factor_weights",
+                    "status": "CONFIRMED",
+                }]
+            },
+        }
+        analytics["principleItems"] = [{
+            "principleSetItemId": 20,
+            "principleText": "가치와 품질을 함께 본다",
+            "ruleJson": {"selection": {"factor_weights": {"value": 0.5, "quality": 0.5}}},
+            "sortOrder": 1,
+        }]
+
+        report = DeterministicReportAnalyzer().build(trades, participants, analytics)
+
+        references = report["referencePrinciples"]
+        self.assertEqual(len(references), 2)
+        self.assertNotIn("REF_VALUE_QUALITY_SELECTION", [item["referenceId"] for item in references])
+        self.assertEqual(references[0]["referenceId"], "REF_LIQUID_UNIVERSE")
+        self.assertEqual(references[0]["comparisonEvidence"]["botAppliedTradeCount"], 1)
+        self.assertEqual(references[0]["comparisonEvidence"]["simulationReturnPercent"], 8.5)
+        self.assertFalse(references[0]["comparisonEvidence"]["performanceUsedForSelection"])
+        self.assertEqual(references[0]["adoptionMode"], "REVIEW_ONLY")
+        self.assertEqual(references[0]["recommendationOrigin"]["originLabel"], "비교 전략 참고")
+        self.assertEqual(references[0]["recommendationOrigin"]["botName"], "우량 가치·품질 퀀트 봇")
+        self.assertEqual(references[0]["recommendationOrigin"]["ruleSource"], "SYSTEM_STRATEGY_CONFIG")
+
+    def test_one_trade_is_evaluated_against_all_applicable_principles(self):
+        trade = {
+            "tradeId": 201,
+            "variantId": 1,
+            "securityId": 7,
+            "securityName": "다중매칭",
+            "tradeSide": "BUY",
+            "tradedAt": "2026-07-01T09:00:00",
+            "appliedTradingDate": "2026-07-01",
+        }
+        analytics = {
+            "dailyPrices": [{
+                "securityId": 7,
+                "priceDate": "2026-07-01",
+                "closePrice": 100.0,
+                "day5Return": 0.18,
+                "tradingValue": 2_000_000_000,
+            }],
+            "ruleSchema": {
+                "entry": {"max_5day_return": 0.10},
+                "universe": {"min_daily_trading_value": 1_000_000_000},
+                "audit": {"interpreted_principles": [
+                    {
+                        "user_natural_text": "급등 종목은 추격매수하지 않는다",
+                        "ai_mapped_rule": "entry.max_5day_return",
+                        "status": "CONFIRMED",
+                    },
+                    {
+                        "user_natural_text": "거래대금 10억원 이상 종목만 산다",
+                        "ai_mapped_rule": "universe.min_daily_trading_value",
+                        "status": "CONFIRMED",
+                    },
+                ]},
+            },
+            "principleItems": [
+                {
+                    "principleSetItemId": 31,
+                    "principleText": "급등 종목은 추격매수하지 않는다",
+                    "ruleJson": {"entry": {"max_5day_return": 0.10}},
+                    "sortOrder": 1,
+                },
+                {
+                    "principleSetItemId": 32,
+                    "principleText": "거래대금 10억원 이상 종목만 산다",
+                    "ruleJson": {"universe": {"min_daily_trading_value": 1_000_000_000}},
+                    "sortOrder": 2,
+                },
+            ],
+        }
+
+        report = DeterministicReportAnalyzer().build([trade], self.participants, analytics)
+
+        review = report["decisionReviews"][0]
+        matches = {item["principleSetItemId"]: item for item in review["principleMatches"]}
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(matches[31]["judgment"], "VIOLATED")
+        self.assertEqual(matches[31]["expectedAction"], "HOLD")
+        self.assertEqual(matches[31]["evidence"]["actualValue"], 0.18)
+        self.assertEqual(matches[32]["judgment"], "FOLLOWED")
+        self.assertEqual(matches[32]["evidence"]["actualValue"], 2_000_000_000.0)
+        self.assertEqual(review["matchedPrinciple"]["principleSetItemId"], 31)
+        self.assertEqual(review["principleJudgment"], "VIOLATED")
+
+    def test_unprovable_sell_principle_is_not_forced_into_followed_or_violated(self):
+        trade = {
+            "tradeId": 202,
+            "variantId": 1,
+            "securityId": 7,
+            "securityName": "매도테스트",
+            "tradeSide": "SELL",
+            "tradedAt": "2026-07-01T09:00:00",
+            "appliedTradingDate": "2026-07-01",
+        }
+        analytics = {
+            "ruleSchema": {
+                "exit": {"take_profit_rate": 0.20},
+                "audit": {"interpreted_principles": [{
+                    "user_natural_text": "20% 수익이면 매도한다",
+                    "ai_mapped_rule": "exit.take_profit_rate",
+                    "status": "CONFIRMED",
+                }]},
+            },
+            "principleItems": [{
+                "principleSetItemId": 33,
+                "principleText": "20% 수익이면 매도한다",
+                "ruleJson": {"exit": {"take_profit_rate": 0.20}},
+                "sortOrder": 1,
+            }],
+        }
+
+        report = DeterministicReportAnalyzer().build([trade], self.participants, analytics)
+
+        match = report["decisionReviews"][0]["principleMatches"][0]
+        self.assertEqual(match["applicability"], "INSUFFICIENT_DATA")
+        self.assertEqual(match["judgment"], "INSUFFICIENT_DATA")
 
     def test_database_rationale_type_precedes_keyword_fallback(self):
         trade = {
@@ -529,7 +715,12 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         for security_id, final_price in ((1, 110), (2, 90), (3, 110), (4, 90)):
             for offset, price_date in enumerate(dates):
                 close_price = 100 + (final_price - 100) * offset / 5
-                prices.append({"securityId": security_id, "priceDate": price_date, "closePrice": close_price})
+                prices.append({
+                    "securityId": security_id,
+                    "priceDate": price_date,
+                    "closePrice": close_price,
+                    "day5Return": 0.05 if security_id in {1, 2} else 0.20,
+                })
         analytics = {
             "dailyPrices": prices,
             "divergenceMoments": [
@@ -543,6 +734,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 ]
             },
             "ruleSchema": {
+                "entry": {"max_5day_return": 0.10},
                 "audit": {
                     "interpreted_principles": [{
                         "user_natural_text": "진입 조건을 충족할 때만 매수한다",

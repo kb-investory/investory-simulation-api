@@ -89,6 +89,9 @@ ANALYTICS_RESPONSE_FIELDS = (
     "behaviorPatterns",
     "actualPrincipleCompliance",
     "positionSnapshots",
+    "principleItems",
+    "securitySnapshots",
+    "dailyPerformance",
 )
 COMPILE_JOB_CACHE: Dict[str, dict] = {}
 REPORT_NARRATIVE_LOCK = Lock()
@@ -693,6 +696,10 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             "actualPrincipleCompliance": actual_compliance,
             "positionSnapshots": position_snapshots,
             "rationaleTypeSnapshots": build_rationale_type_snapshots(normalized_trades),
+            # Keep the evaluated principle identities in analytics_json so a
+            # report can be rebuilt without reading today's mutable principle set.
+            "principleItems": principles_data,
+            "securitySnapshots": securities,
         }
 
         persistence_started = perf_counter()
@@ -720,6 +727,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
         )
         report_analytics = dict(analytics_payload)
         report_analytics["dailyPrices"] = daily_prices
+        report_analytics["dailyPerformance"] = normalized_snapshots
         report_analytics["ruleSchema"] = rule_schema_dict
         report_generation_started = perf_counter()
         deterministic_report = SimulationReportGenerator().build_deterministic_report(
@@ -965,7 +973,7 @@ def get_simulation_report(simulation_id: int, background_tasks: BackgroundTasks)
     """
     [대응 화면: 리포트 탭 / 결과 복기]
     - 백테스트 실행 내역 기반 원칙 준수 복기(decisionReviews), 근거 검증(evidenceReviews),
-      학습 인사이트(learningInsights), 추천 원칙(recommendedPrinciples), 개선 행동 조치를 종합 반환합니다.
+      학습 인사이트(learningInsights), 기존 원칙 평가(principleEvaluations), 강화안을 종합 반환합니다.
     """
     try:
         # 1. 인메모리 캐시에서 먼저 확인
