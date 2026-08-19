@@ -13,6 +13,7 @@ from typing import Dict, List, Optional
 from app.modules.simulation.models import Portfolio, VirtualOrder
 from app.modules.simulation.evaluator import StockEvaluator
 from app.modules.simulation.rule_schema import SelectionRule
+from app.modules.simulation.strategy_catalog import VALUE_QUALITY_STRATEGY
 
 
 def _security_label(security_id: int, securities_map: Dict[int, dict]) -> str:
@@ -465,7 +466,7 @@ class PersonalBotStrategy(BaseStrategy):
 class FamousStrategyBot(BaseStrategy):
     """3. 유명 투자 전략 봇 (우량 가치·품질 퀀트 고정 전략)"""
     def __init__(self, variant_id: int):
-        super().__init__(variant_id, "FAMOUS_STRATEGY", "우량 가치·품질 퀀트 봇")
+        super().__init__(variant_id, "FAMOUS_STRATEGY", VALUE_QUALITY_STRATEGY["variantName"])
         self.evaluator = StockEvaluator()
 
     def generate_signals(
@@ -484,7 +485,8 @@ class FamousStrategyBot(BaseStrategy):
                 pos.current_price = curr_price
                 return_rate = pos.return_rate
 
-                if return_rate >= 0.15:
+                take_profit_rate = VALUE_QUALITY_STRATEGY["exit"]["take_profit_rate"]
+                if return_rate >= take_profit_rate:
                     security_label = _security_label(sec_id, securities_map)
                     orders.append(
                         VirtualOrder(
@@ -497,26 +499,20 @@ class FamousStrategyBot(BaseStrategy):
                             signal_date=current_date,
                             rationale=(f"{security_label} 매도: 평균매입가 {pos.average_buy_price:,.0f}원 대비 "
                                        f"현재가 {curr_price:,.0f}원, 수익률 +{return_rate*100:.1f}%로 "
-                                       "매도 기준 +15.0% 도달")
+                                       f"매도 기준 +{take_profit_rate*100:.1f}% 도달")
                         )
                     )
 
         famous_selection = SelectionRule(
-            factor_weights={"value": 0.40, "quality": 0.40, "growth": 0.20, "trend": 0.0, "disclosure": 0.0},
-            min_passing_score=75.0
+            factor_weights=VALUE_QUALITY_STRATEGY["selection"]["factor_weights"],
+            min_passing_score=VALUE_QUALITY_STRATEGY["selection"]["min_passing_score"],
         )
         candidates = self.evaluator.screen_candidates(
             daily_prices_today,
             securities_map,
             famous_selection,
-            universe_rule={
-                "allowed_markets": ["KOSPI", "KOSDAQ"],
-                "min_market_cap": 50_000_000_000,
-                "min_daily_trading_value": 1_000_000_000,
-                "exclude_halted": True,
-                "exclude_administrative": True,
-            },
-            entry_rule={"max_5day_return": 0.15, "moving_average_condition": "NONE", "require_positive_disclosure": False},
+            universe_rule=VALUE_QUALITY_STRATEGY["universe"],
+            entry_rule=VALUE_QUALITY_STRATEGY["entry"],
             required_factors=("value", "quality"),
         )
         self.last_screening_audit = {
@@ -530,7 +526,7 @@ class FamousStrategyBot(BaseStrategy):
             sec_id = candidate["securityId"]
             if sec_id not in portfolio.positions:
                 close_price = candidate["priceInfo"]["closePrice"]
-                buy_amount = portfolio.total_equity * 0.20
+                buy_amount = portfolio.total_equity * VALUE_QUALITY_STRATEGY["portfolio"]["target_weight"]
                 buy_qty = int(buy_amount / close_price)
                 if buy_qty > 0 and portfolio.cash_balance >= close_price * buy_qty:
                     orders.append(
