@@ -12,7 +12,10 @@ from urllib.request import Request, urlopen
 
 from app.config import settings
 from app.modules.simulation.prompts import SYSTEM_COMPILER_PROMPT, build_user_compiler_prompt
-from app.modules.simulation.rule_schema import InvestmentBotStrategySchema
+from app.modules.simulation.rule_schema import (
+    InvestmentBotStrategySchema,
+    executable_rule_paths,
+)
 
 
 class RuleCompilationError(RuntimeError):
@@ -100,18 +103,32 @@ RULE_OUTPUT_SCHEMA = {
         },
         "audit": {
             "type": "object", "additionalProperties": False,
-            "required": ["ai_confidence", "interpreted_principles", "needs_user_confirmation"],
+            "required": [
+                "ai_confidence",
+                "interpreted_principles",
+                "needs_user_confirmation",
+                "principle_conflicts",
+            ],
             "properties": {
                 "ai_confidence": {"type": "number"},
                 "interpreted_principles": {
                     "type": "array",
                     "items": {
                         "type": "object", "additionalProperties": False,
-                        "required": ["user_natural_text", "ai_mapped_rule", "status"],
+                        "required": [
+                            "user_natural_text",
+                            "ai_mapped_rule",
+                            "status",
+                            "unmappable_reason",
+                        ],
                         "properties": {
                             "user_natural_text": {"type": "string"},
                             "ai_mapped_rule": {"type": "string"},
                             "status": {"type": "string"},
+                            # Empty when the principle did map. When it did not,
+                            # this is the only thing standing between the user
+                            # and a principle parked in REVIEW forever.
+                            "unmappable_reason": {"type": "string"},
                         },
                     },
                 },
@@ -121,6 +138,30 @@ RULE_OUTPUT_SCHEMA = {
                         "type": "object", "additionalProperties": False,
                         "required": ["field", "reason"],
                         "properties": {"field": {"type": "string"}, "reason": {"type": "string"}},
+                    },
+                },
+                # Pairs that fight each other. Rule paths alone cannot find these
+                # -- "average down" and "cut at -10%" live in different sections
+                # and only collide once you read what they mean.
+                "principle_conflicts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": [
+                            "first_principle_text",
+                            "second_principle_text",
+                            "conflict_type",
+                            "reason",
+                        ],
+                        "properties": {
+                            "first_principle_text": {"type": "string"},
+                            "second_principle_text": {"type": "string"},
+                            "conflict_type": {
+                                "type": "string",
+                                "enum": ["CONTRADICTION", "OVERLAP", "AMBIGUOUS_PRIORITY"],
+                            },
+                            "reason": {"type": "string"},
+                        },
                     },
                 },
             },
@@ -230,6 +271,8 @@ class AIRuleCompiler:
             content = result["choices"][0]["message"]["content"]
             data = json.loads(content)
             self._validate_generated_data(data)
+            self._normalize_mapped_rules(data)
+            self._drop_unanchored_conflicts(data, principles)
             schema = InvestmentBotStrategySchema.from_dict(data)
         except (HTTPError, URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise RuleCompilationError(
@@ -246,6 +289,62 @@ class AIRuleCompiler:
             "fallbackUsed": False,
         }
         return schema
+
+    @staticmethod
+    def _normalize_mapped_rules(data: dict) -> None:
+        """Demote any mapping that is not a real rule path.
+
+        The model sometimes answers with a description instead of the dotted
+        path. Left alone it stays CONFIRMED, and every later trade check quietly
+        reports "unsupported rule path" while the screen claims the principle is
+        executable. Force those to REVIEW_REQUIRED so the failure is visible.
+        """
+        audit = data.get("audit")
+        if not isinstance(audit, dict):
+            return
+        valid_paths = set(executable_rule_paths())
+        for item in audit.get("interpreted_principles") or []:
+            if not isinstance(item, dict):
+                continue
+            mapped = str(item.get("ai_mapped_rule") or "").strip()
+            if mapped in valid_paths:
+                item["ai_mapped_rule"] = mapped
+                continue
+            item["ai_mapped_rule"] = ""
+            item["status"] = "REVIEW_REQUIRED"
+            if not str(item.get("unmappable_reason") or "").strip():
+                item["unmappable_reason"] = (
+                    "이 원칙에 해당하는 실행 규칙을 찾지 못해 직접 검토가 필요합니다."
+                    if not mapped
+                    else "AI가 지정한 실행 규칙이 유효하지 않아 직접 검토가 필요합니다."
+                )
+
+    @staticmethod
+    def _drop_unanchored_conflicts(data: dict, principles: List[str]) -> None:
+        """Keep only conflicts between two principles the user actually wrote.
+
+        A conflict naming text the user never wrote, or pairing a principle with
+        itself, is the model composing rather than observing. Those are dropped
+        instead of being shown to the user as a finding about their own rules.
+        """
+        audit = data.get("audit")
+        if not isinstance(audit, dict):
+            return
+        known = {str(principle).strip() for principle in principles}
+        kept = []
+        for item in audit.get("principle_conflicts") or []:
+            if not isinstance(item, dict):
+                continue
+            first = str(item.get("first_principle_text") or "").strip()
+            second = str(item.get("second_principle_text") or "").strip()
+            if first in known and second in known and first != second:
+                kept.append({
+                    "first_principle_text": first,
+                    "second_principle_text": second,
+                    "conflict_type": str(item.get("conflict_type") or "CONTRADICTION"),
+                    "reason": str(item.get("reason") or ""),
+                })
+        audit["principle_conflicts"] = kept
 
     @staticmethod
     def _validate_generated_data(data: dict) -> None:

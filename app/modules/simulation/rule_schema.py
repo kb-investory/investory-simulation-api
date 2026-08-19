@@ -79,6 +79,8 @@ class AuditPrincipleItem:
     user_natural_text: str
     ai_mapped_rule: str
     status: str = "CONFIRMED"
+    # 실행 규칙으로 만들 수 없을 때 그 사유. 매핑에 성공하면 빈 문자열입니다.
+    unmappable_reason: str = ""
 
 @dataclass
 class AuditRule:
@@ -86,6 +88,8 @@ class AuditRule:
     ai_confidence: float = 0.90
     interpreted_principles: List[AuditPrincipleItem] = field(default_factory=list)
     needs_user_confirmation: List[Dict[str, str]] = field(default_factory=list)
+    # 서로 충돌하거나 중복되는 원칙 쌍. 규칙 경로만으로는 찾을 수 없습니다.
+    principle_conflicts: List[Dict[str, str]] = field(default_factory=list)
 
 @dataclass
 class InvestmentBotStrategySchema:
@@ -128,11 +132,18 @@ class InvestmentBotStrategySchema:
         rebalance = RebalanceRule(**{k: v for k, v in reb_data.items() if k in RebalanceRule.__annotations__})
         
         aud_data = data.get("audit", {})
-        inter_principles = [AuditPrincipleItem(**item) for item in aud_data.get("interpretedPrinciples", aud_data.get("interpreted_principles", []))]
+        inter_principles = [
+            AuditPrincipleItem(**{
+                key: value for key, value in item.items()
+                if key in AuditPrincipleItem.__annotations__
+            })
+            for item in aud_data.get("interpretedPrinciples", aud_data.get("interpreted_principles", []))
+        ]
         audit = AuditRule(
             ai_confidence=aud_data.get("aiConfidence", aud_data.get("ai_confidence", 0.90)),
             interpreted_principles=inter_principles,
-            needs_user_confirmation=aud_data.get("needsUserConfirmation", aud_data.get("needs_user_confirmation", []))
+            needs_user_confirmation=aud_data.get("needsUserConfirmation", aud_data.get("needs_user_confirmation", [])),
+            principle_conflicts=aud_data.get("principleConflicts", aud_data.get("principle_conflicts", [])),
         )
         
         schema = cls(
@@ -147,3 +158,19 @@ class InvestmentBotStrategySchema:
         )
         schema.selection.validate()
         return schema
+
+
+def executable_rule_paths() -> List[str]:
+    """Every dotted path a principle may be mapped onto.
+
+    ``audit.ai_mapped_rule`` must be one of these exactly. Anything else cannot
+    be evaluated, so a principle carrying prose here would be marked CONFIRMED
+    and then silently fail every trade check.
+    """
+    schema = InvestmentBotStrategySchema().to_dict()
+    return sorted(
+        f"{section}.{field}"
+        for section, values in schema.items()
+        if section != "audit" and isinstance(values, dict)
+        for field in values
+    )

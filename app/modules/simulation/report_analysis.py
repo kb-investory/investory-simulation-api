@@ -668,12 +668,18 @@ def _build_principle_evaluations(
 def _build_principle_set_diagnostics(
     catalog: List[dict],
     decision_reviews: List[dict],
+    rule_schema: Optional[dict] = None,
 ) -> dict:
     """Judge the principle set as a whole, not one principle at a time.
 
     Per-principle verdicts can all read "fine" while the set has no sell rule at
     all, or two principles quietly bound to the same rule path.
     """
+    audit = (rule_schema or {}).get("audit") if isinstance(rule_schema, dict) else {}
+    audit = audit if isinstance(audit, dict) else {}
+    interpreted_principles = audit.get("interpreted_principles") or audit.get("interpretedPrinciples") or []
+    principle_conflicts = audit.get("principle_conflicts") or audit.get("principleConflicts") or []
+
     covered_trade_ids = set()
     applicable_by_section: Dict[str, int] = defaultdict(int)
     for review in decision_reviews:
@@ -732,17 +738,48 @@ def _build_principle_set_diagnostics(
         if len(items) > 1
     ]
 
+    # A principle that cannot become a rule used to sit in REVIEW with no
+    # explanation, run after run. The compiler now says why, so carry it here.
+    reason_by_text = {
+        str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip():
+            str(item.get("unmappable_reason") or item.get("unmappableReason") or "")
+        for item in interpreted_principles
+        if isinstance(item, dict)
+    }
     unmapped = [
         {
             "principleSetItemId": principle.get("principleSetItemId"),
             "principleText": principle.get("principleText"),
+            "reason": reason_by_text.get(str(principle.get("principleText") or "").strip())
+            or "실행 규칙으로 해석되지 않아 원칙 문구와 기준을 직접 검토해야 합니다.",
         }
         for principle in catalog
         if not principle.get("targetRule") or str(principle.get("status")) != "CONFIRMED"
     ]
 
+    # Semantic clashes the rule paths cannot see: two principles in different
+    # sections that tell the user to do opposite things in the same moment.
+    known_texts = {str(principle.get("principleText") or "").strip() for principle in catalog}
+    conflicts = [
+        {
+            "firstPrincipleText": str(item.get("first_principle_text") or item.get("firstPrincipleText") or "").strip(),
+            "secondPrincipleText": str(item.get("second_principle_text") or item.get("secondPrincipleText") or "").strip(),
+            "conflictType": str(item.get("conflict_type") or item.get("conflictType") or "CONTRADICTION"),
+            "reason": str(item.get("reason") or ""),
+            "judgmentSource": "LLM_PRINCIPLE_REVIEW",
+        }
+        for item in principle_conflicts
+        if isinstance(item, dict)
+    ]
+    conflicts = [
+        item for item in conflicts
+        if item["firstPrincipleText"] in known_texts
+        and item["secondPrincipleText"] in known_texts
+    ]
+
     return {
         "principleCount": len(catalog),
+        "conflicts": conflicts,
         "coverage": {
             "totalTradeCount": total_trade_count,
             "coveredTradeCount": len(covered_trade_ids),
@@ -1651,6 +1688,7 @@ class DeterministicReportAnalyzer:
         principle_set_diagnostics = _build_principle_set_diagnostics(
             principle_catalog,
             decision_reviews,
+            rule_schema,
         )
         performance_context = _build_performance_context(analytics, participant_summary)
         reference_principles = _build_reference_principles(
