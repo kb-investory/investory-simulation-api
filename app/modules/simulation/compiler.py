@@ -223,7 +223,9 @@ class AIRuleCompiler:
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {openai_key}"},
         )
         try:
-            with urlopen(request, timeout=settings.LLM_TIMEOUT) as response:
+            # Rule compilation runs on the reasoning tier behind an async job,
+            # so it waits on the longer budget rather than the interactive one.
+            with urlopen(request, timeout=settings.REASONING_LLM_TIMEOUT) as response:
                 result = json.loads(response.read().decode("utf-8"))
             content = result["choices"][0]["message"]["content"]
             data = json.loads(content)

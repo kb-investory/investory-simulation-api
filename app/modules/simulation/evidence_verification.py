@@ -22,12 +22,15 @@ def _output_text(response_payload: dict) -> Optional[str]:
 
 
 class _ResponsesAgent:
-    def __init__(self, api_key: str, model: str, timeout: int):
+    def __init__(self, api_key: str, model: str, timeout: int, max_output_tokens: Optional[int] = None):
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        self.max_output_tokens = max_output_tokens
 
     def _request(self, payload: dict) -> dict:
+        if self.max_output_tokens:
+            payload = {**payload, "max_output_tokens": self.max_output_tokens}
         request = urllib.request.Request(
             "https://api.openai.com/v1/responses",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -35,7 +38,17 @@ class _ResponsesAgent:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             raw = json.loads(response.read().decode("utf-8"))
-        parsed = json.loads(_output_text(raw) or "")
+        text = _output_text(raw)
+        if not text:
+            # A reasoning model that runs out of budget returns reasoning blocks
+            # and no message. Say so, instead of failing on an empty json.loads.
+            status = raw.get("status")
+            reason = (raw.get("incomplete_details") or {}).get("reason")
+            raise ValueError(
+                f"Evidence agent returned no answer (status={status}, reason={reason}). "
+                "Raise REASONING_MAX_OUTPUT_TOKENS or use a non-reasoning model."
+            )
+        parsed = json.loads(text)
         if not isinstance(parsed, dict):
             raise ValueError("Evidence agent returned a non-object response")
         return parsed

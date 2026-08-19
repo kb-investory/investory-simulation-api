@@ -30,7 +30,8 @@ class SimulationReportGenerator:
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
         self.model = model or settings.REPORT_MODEL or "gpt-4o-mini"
-        self.thesis_model = settings.THESIS_VERIFICATION_MODEL or "gpt-5.4-nano"
+        self.search_model = settings.EVIDENCE_SEARCH_MODEL
+        self.judgment_model = settings.EVIDENCE_JUDGMENT_MODEL
 
     def generate_report(
         self,
@@ -223,8 +224,19 @@ class SimulationReportGenerator:
         if not rationale or rationale == "사용자가 입력한 매매 근거 없음":
             return self._unconfirmed_thesis_outcome("NO_RECORDED_RATIONALE", "기록된 매매 근거가 없어 검증할 수 없습니다.")
         checked_until = date.today().isoformat()
-        search_agent = EvidenceSearchAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
-        judgment_agent = EvidenceJudgmentAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
+        # Retrieval runs on the fast tier; the verdict runs on the reasoning
+        # tier, which needs both the longer wall clock and the token budget.
+        search_agent = EvidenceSearchAgent(
+            self.api_key,
+            self.search_model,
+            settings.LLM_TIMEOUT,
+        )
+        judgment_agent = EvidenceJudgmentAgent(
+            self.api_key,
+            self.judgment_model,
+            settings.REASONING_LLM_TIMEOUT,
+            settings.REASONING_MAX_OUTPUT_TOKENS,
+        )
         dossier = search_agent.search(review, checked_until)
         return judgment_agent.judge(review, dossier, checked_until)
 

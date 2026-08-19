@@ -28,11 +28,48 @@ class Settings:
     KRX_OPEN_API_KEY: str = os.getenv("KRX_OPEN_API_KEY", "")
     
     # LLM Model Configurations
-    COMPILER_MODEL: str = os.getenv("COMPILER_MODEL", "gpt-4o-mini")
-    DISCLOSURE_MODEL: str = os.getenv("DISCLOSURE_MODEL", "gpt-4o-mini")
-    REPORT_MODEL: str = os.getenv("REPORT_MODEL", "gpt-4o-mini")
-    THESIS_VERIFICATION_MODEL: str = os.getenv("THESIS_VERIFICATION_MODEL", "gpt-5.4-nano")
+    #
+    # Two tiers, chosen by what the task actually needs:
+    #
+    #   REASONING_MODEL - multi-step judgment where being wrong is expensive:
+    #     mapping a sentence onto an executable rule, searching the web and
+    #     deciding whether a thesis held. Spends far more output tokens on
+    #     reasoning and runs slower, so only tasks that are already asynchronous
+    #     should use it.
+    #
+    #   FAST_MODEL - high-volume classification and prose where the facts are
+    #     already fixed by the deterministic engine. Latency and cost dominate
+    #     because these run once per disclosure or once per report.
+    REASONING_MODEL: str = os.getenv("REASONING_MODEL", "gpt-5-nano")
+    FAST_MODEL: str = os.getenv("FAST_MODEL", "gpt-4o-mini")
+
+    # Natural language principle -> executable rule JSON. Runs behind an async
+    # compile job, and every later principle evaluation depends on this mapping.
+    COMPILER_MODEL: str = os.getenv("COMPILER_MODEL") or REASONING_MODEL
+    # Thesis verification is two different jobs and they do not want the same
+    # model. Gathering dated sources is retrieval, and the reasoning tier spends
+    # a minute and a half on it for no better result. Deciding whether those
+    # sources actually support the user's thesis is the judgment, and there the
+    # reasoning tier is measurably more willing to answer "not confirmed"
+    # instead of inflating a single article into a realized thesis.
+    THESIS_VERIFICATION_MODEL: str = os.getenv("THESIS_VERIFICATION_MODEL", "")
+    EVIDENCE_SEARCH_MODEL: str = (
+        os.getenv("EVIDENCE_SEARCH_MODEL") or THESIS_VERIFICATION_MODEL or FAST_MODEL
+    )
+    EVIDENCE_JUDGMENT_MODEL: str = (
+        os.getenv("EVIDENCE_JUDGMENT_MODEL") or THESIS_VERIFICATION_MODEL or REASONING_MODEL
+    )
+    # One short classification per disclosure, batched over many rows.
+    DISCLOSURE_MODEL: str = os.getenv("DISCLOSURE_MODEL") or FAST_MODEL
+    # Explanatory prose only; judgments and numbers are never taken from it.
+    REPORT_MODEL: str = os.getenv("REPORT_MODEL") or FAST_MODEL
+
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "30"))
+    # Reasoning models interleave several tool calls before answering, so they
+    # need both a longer wall clock and room to finish. Without the token budget
+    # the response comes back "incomplete" with reasoning but no answer.
+    REASONING_LLM_TIMEOUT: int = int(os.getenv("REASONING_LLM_TIMEOUT", "120"))
+    REASONING_MAX_OUTPUT_TOKENS: int = int(os.getenv("REASONING_MAX_OUTPUT_TOKENS", "8000"))
     MAX_LLM_CALLS_PER_RUN: int = int(os.getenv("MAX_LLM_CALLS_PER_RUN", "50"))
 
     
