@@ -27,6 +27,7 @@ from app.api.error_responses import internal_server_error
 
 from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.report_generator import SimulationReportGenerator
 from app.modules.simulation.rationale_snapshots import build_rationale_type_snapshots
@@ -738,6 +739,38 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             analytics=report_analytics,
         )
         report_generation_ms = (perf_counter() - report_generation_started) * 1000
+
+        # Replay the user's own trades once per violated principle so the report
+        # can attribute the gap to a single principle instead of the whole bot.
+        counterfactual_started = perf_counter()
+        actual_summary = next(
+            (item for item in participant_summary if item["variantType"] == "ACTUAL_USER"),
+            {},
+        )
+        try:
+            build_principle_counterfactuals(
+                deterministic_report,
+                period_start=req.period_start,
+                period_end=req.period_end,
+                initial_capital=initial_capital,
+                securities_map=securities_map,
+                daily_prices=daily_prices,
+                trading_days=trading_days,
+                actual_trades=user_trades,
+                simulated_trades=normalized_trades,
+                initial_positions=initial_positions,
+                disclosures_by_date=disclosures_by_date,
+                baseline_return_percent=actual_summary.get("cumulativeReturnPercent"),
+                baseline_mdd_percent=actual_summary.get("mddPercent"),
+            )
+        except Exception as error:
+            logger.warning(
+                "Principle counterfactuals skipped for simulation %s",
+                db_run_id,
+                exc_info=error,
+            )
+        counterfactual_ms = (perf_counter() - counterfactual_started) * 1000
+
         background_tasks.add_task(
             save_simulation_report_to_db,
             db_run_id,
@@ -804,6 +837,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
                 "monteCarlo500Runs": round(monte_carlo_ms, 1),
                 "analytics": round(analytics_ms, 1),
                 "reportGeneration": round(report_generation_ms, 1),
+                "principleCounterfactuals": round(counterfactual_ms, 1),
                 "persistenceReservation": round(persistence_reservation_ms, 1),
                 "responseReady": round((perf_counter() - request_started) * 1000, 1),
                 "cacheHit": False,
