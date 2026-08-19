@@ -327,11 +327,43 @@ def _rule_paths(rule_json: dict, prefix: str = "") -> List[str]:
     return paths
 
 
+def _resolve_current_value(
+    target_rule: str,
+    item_rule: dict,
+    rule_schema: dict,
+    confirmations: dict,
+) -> tuple[object, str]:
+    """Find the threshold to judge against, and say where it came from.
+
+    A number the compiler invented is not the user's standard. Judging a trade
+    against it and calling the result a violation grades the user on a bar they
+    never set, so the source travels with the value and gates what may be done
+    with it.
+    """
+    if not target_rule:
+        return None, "NOT_APPLICABLE"
+    if target_rule in confirmations:
+        return confirmations[target_rule], "USER_CONFIRMED"
+    from_principle = _nested_value(item_rule, target_rule) if isinstance(item_rule, dict) else None
+    if from_principle is not None:
+        return from_principle, "PRINCIPLE_RULE_JSON"
+    from_schema = _nested_value(rule_schema, target_rule)
+    if from_schema is not None:
+        return from_schema, "AI_INFERRED"
+    return None, "MISSING"
+
+
 def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
     """Return every active principle, including ones with no applicable trades."""
     audit = rule_schema.get("audit") if isinstance(rule_schema, dict) else {}
     interpreted = audit.get("interpreted_principles", []) if isinstance(audit, dict) else []
     principle_items = analytics.get("principleItems") or []
+    confirmations = {
+        str(item.get("targetRule") or item.get("target_rule") or ""): item.get("confirmedValue")
+        if "confirmedValue" in item else item.get("confirmed_value")
+        for item in (analytics.get("ruleConfirmations") or [])
+        if isinstance(item, dict) and (item.get("targetRule") or item.get("target_rule"))
+    }
     catalog = []
 
     if principle_items:
@@ -361,12 +393,16 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
                 or (matched or {}).get("mappedRule")
                 or (item_paths[0] if len(item_paths) == 1 else "")
             )
+            current_value, value_source = _resolve_current_value(
+                target_rule, item_rule, rule_schema, confirmations
+            )
             catalog.append({
                 "principleSetItemId": item.get("principleSetItemId") or item.get("principle_set_item_id"),
                 "principleText": text,
                 "targetRule": target_rule or None,
                 "status": str((matched or {}).get("status") or ("CONFIRMED" if target_rule else "REVIEW_REQUIRED")),
-                "currentValue": _nested_value(rule_schema, target_rule) if target_rule else None,
+                "currentValue": current_value,
+                "valueSource": value_source,
                 "currentRuleJson": item_rule if isinstance(item_rule, dict) else {},
                 "sortOrder": item.get("sortOrder") or item.get("sort_order") or index,
             })
@@ -376,13 +412,16 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
         if not isinstance(item, dict):
             continue
         target_rule = str(item.get("ai_mapped_rule") or item.get("mappedRule") or "")
-        current_value = _nested_value(rule_schema, target_rule) if target_rule else None
+        current_value, value_source = _resolve_current_value(
+            target_rule, {}, rule_schema, confirmations
+        )
         catalog.append({
             "principleSetItemId": item.get("principle_set_item_id") or item.get("principleSetItemId"),
             "principleText": str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip(),
             "targetRule": target_rule or None,
             "status": str(item.get("status") or "CONFIRMED"),
             "currentValue": current_value,
+            "valueSource": value_source,
             "currentRuleJson": _rule_json(target_rule, current_value) if target_rule and current_value is not None else {},
             "sortOrder": index,
         })
@@ -470,6 +509,7 @@ def _build_principle_evaluations(
         followed_20d = [value for item in followed if (value := _directional_return(item, "return20dPercent")) is not None]
         violated_5d = [value for item in violated if (value := _directional_return(item, "return5dPercent")) is not None]
         violated_20d = [value for item in violated if (value := _directional_return(item, "return20dPercent")) is not None]
+        value_source = str(principle.get("valueSource") or "MISSING")
         violation_lower_bound = _wilson_lower_bound(len(violated), applicable_count)
         evidence_strength = _evidence_strength(applicable_count, violation_lower_bound)
         status = str(principle.get("status") or "REVIEW_REQUIRED")
@@ -481,8 +521,19 @@ def _build_principle_evaluations(
             verdict = "INSUFFICIENT_DATA"
             reason = f"평가 가능한 거래가 {applicable_count}건이라 원칙을 변경하기에는 데이터가 부족합니다."
         elif len(violated) >= 2 and (violation_rate or 0) >= STRENGTHEN_VIOLATION_RATE:
-            verdict = "STRENGTHEN"
-            reason = f"적용 거래 {applicable_count}건 중 {len(violated)}건에서 원칙을 지키지 않아 실행 기준 강화가 필요합니다."
+            if value_source == "AI_INFERRED":
+                # The repeated violation is real, but it was measured against a
+                # number the compiler invented because the sentence had none.
+                # Ask the user what the bar is before proposing to tighten it.
+                verdict = "CONFIRM_THRESHOLD"
+                reason = (
+                    f"적용 거래 {applicable_count}건 중 {len(violated)}건이 기준을 벗어났습니다. "
+                    "다만 이 기준값은 원칙 문구에 수치가 없어 AI가 추정한 값입니다. "
+                    "기준을 확정해 주시면 다음 회차부터 강화안을 제안합니다."
+                )
+            else:
+                verdict = "STRENGTHEN"
+                reason = f"적용 거래 {applicable_count}건 중 {len(violated)}건에서 원칙을 지키지 않아 실행 기준 강화가 필요합니다."
         elif (
             len(followed_5d) >= OUTCOME_SAMPLE_MINIMUM
             and len(followed_20d) >= OUTCOME_SAMPLE_MINIMUM
@@ -562,6 +613,8 @@ def _build_principle_evaluations(
             "principleSetItemId": principle_id,
             "principleText": principle_text,
             "targetRule": target_rule,
+            "currentValue": principle.get("currentValue"),
+            "valueSource": value_source,
             "verdict": verdict,
             "evaluationReason": reason,
             "statistics": {
@@ -1582,7 +1635,8 @@ class DeterministicReportAnalyzer:
         )
         evaluation_counts = {
             verdict: sum(item["verdict"] == verdict for item in principle_evaluations)
-            for verdict in ("KEEP", "STRENGTHEN", "REVISE", "REVIEW", "EARLY_SIGNAL", "INSUFFICIENT_DATA")
+            for verdict in ("KEEP", "STRENGTHEN", "REVISE", "REVIEW", "EARLY_SIGNAL",
+                            "CONFIRM_THRESHOLD", "INSUFFICIENT_DATA")
         }
         principle_evaluation_summary = {
             "totalCount": len(principle_evaluations),
@@ -1591,6 +1645,7 @@ class DeterministicReportAnalyzer:
             "reviseCount": evaluation_counts["REVISE"],
             "reviewCount": evaluation_counts["REVIEW"],
             "earlySignalCount": evaluation_counts["EARLY_SIGNAL"],
+            "confirmThresholdCount": evaluation_counts["CONFIRM_THRESHOLD"],
             "insufficientDataCount": evaluation_counts["INSUFFICIENT_DATA"],
         }
         principle_set_diagnostics = _build_principle_set_diagnostics(

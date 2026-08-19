@@ -7,12 +7,15 @@ runtime path in this module falls back to bundled JSON fixtures.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional
 
 from app.modules.simulation.db_persistence import get_db_connection
+
+logger = logging.getLogger(__name__)
 
 
 class SimulationDataError(RuntimeError):
@@ -547,6 +550,84 @@ class SimulationRepository:
             {"indexCode": row[0], "priceDate": _date_text(row[1]), "closePrice": float(row[2])}
             for row in rows
         ]
+
+    def load_rule_confirmations(self, user_id: int) -> List[dict]:
+        """Return the execution thresholds the user confirmed themselves.
+
+        These win over anything the compiler inferred, because a value the user
+        never set is not a bar their trades can fairly be judged against.
+        """
+        conn = self.connection_factory()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT target_rule, confirmed_value_json, suggested_value_json, confirmed_at
+                    FROM personal_bot_rule_confirmations
+                    WHERE user_id = %s
+                    ORDER BY target_rule
+                    """,
+                    (user_id,),
+                )
+                rows = cur.fetchall()
+        except Exception as error:
+            # The table ships with a migration; a server running ahead of it
+            # should degrade to "nothing confirmed", not fail the simulation.
+            logger.warning("Rule confirmations unavailable (%s)", type(error).__name__)
+            return []
+        finally:
+            conn.close()
+
+        confirmations = []
+        for row in rows:
+            confirmed = row[1]
+            suggested = row[2]
+            if isinstance(confirmed, str):
+                try:
+                    confirmed = json.loads(confirmed)
+                except json.JSONDecodeError:
+                    continue
+            if isinstance(suggested, str):
+                try:
+                    suggested = json.loads(suggested)
+                except json.JSONDecodeError:
+                    suggested = None
+            confirmations.append({
+                "targetRule": row[0],
+                "confirmedValue": confirmed,
+                "suggestedValue": suggested,
+                "confirmedAt": _datetime_text(row[3]) if row[3] else None,
+            })
+        return confirmations
+
+    def save_rule_confirmations(self, user_id: int, confirmations: List[dict]) -> List[dict]:
+        """Upsert user-confirmed thresholds and return the stored rows."""
+        conn = self.connection_factory()
+        try:
+            with conn.cursor() as cur:
+                for item in confirmations:
+                    cur.execute(
+                        """
+                        INSERT INTO personal_bot_rule_confirmations
+                            (user_id, target_rule, confirmed_value_json, suggested_value_json)
+                        VALUES (%s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            confirmed_value_json = VALUES(confirmed_value_json),
+                            suggested_value_json = VALUES(suggested_value_json)
+                        """,
+                        (
+                            user_id,
+                            item["targetRule"],
+                            json.dumps(item["confirmedValue"], ensure_ascii=False),
+                            json.dumps(item.get("suggestedValue"), ensure_ascii=False)
+                            if item.get("suggestedValue") is not None
+                            else None,
+                        ),
+                    )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.load_rule_confirmations(user_id)
 
     def load_principles(self, user_id: int) -> List[dict]:
         conn = self.connection_factory()

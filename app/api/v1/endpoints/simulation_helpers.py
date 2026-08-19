@@ -25,6 +25,19 @@ class RuleCompileRequest(BaseModel):
     actual_trades: Optional[List[dict]] = Field(default=None, validation_alias=AliasChoices("actual_trades", "actualTrades"))
     account_id: Optional[int] = Field(default=None, validation_alias=AliasChoices("account_id", "accountId"))
 
+class RuleConfirmationItem(BaseModel):
+    """One execution threshold the user is taking ownership of."""
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    targetRule: str = Field(validation_alias=AliasChoices("targetRule", "target_rule"))
+    # Any JSON scalar or list: thresholds, on/off switches, ladders, market lists.
+    confirmedValue: object = Field(validation_alias=AliasChoices("confirmedValue", "confirmed_value"))
+    suggestedValue: Optional[object] = Field(default=None, validation_alias=AliasChoices("suggestedValue", "suggested_value"))
+
+
+class RuleConfirmationRequest(BaseModel):
+    confirmations: List[RuleConfirmationItem] = Field(min_length=1)
+
+
 class SimulationRunRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
     simulation_run_id: Optional[int] = Field(default=1, validation_alias=AliasChoices("simulation_run_id", "simulationRunId"))
@@ -40,6 +53,7 @@ class SimulationRunRequest(BaseModel):
     personal_bot_id: Optional[str] = Field(default=None, validation_alias=AliasChoices("personal_bot_id", "personalBotId"))
 
 RuleCompileRequest.model_rebuild()
+RuleConfirmationRequest.model_rebuild()
 SimulationRunRequest.model_rebuild()
 
 
