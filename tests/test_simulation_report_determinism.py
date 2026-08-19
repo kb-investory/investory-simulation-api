@@ -465,7 +465,10 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             )
 
         reinforcement = report["principleReinforcements"][0]
-        self.assertEqual(reinforcement["proposedValue"], 0.10)
+        # 0.18 is looser than the current 0.15, so the model's number is dropped
+        # and the deterministic proposal stands.
+        self.assertNotEqual(reinforcement["proposedValue"], 0.18)
+        self.assertLess(reinforcement["proposedValue"], reinforcement["currentValue"])
         self.assertEqual(reinforcement["proposalSource"], "DETERMINISTIC_FALLBACK")
 
     def test_llm_failure_keeps_complete_deterministic_report(self):
@@ -520,6 +523,107 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["principleEvaluations"][0]["statistics"]["violatedCount"], 2)
         self.assertEqual(report["principleEvaluations"][0]["suggestion"]["principleSetItemId"], 9)
         self.assertEqual(report["principleEvaluations"][1]["verdict"], "INSUFFICIENT_DATA")
+
+    def test_thin_evidence_is_not_reported_as_a_cleared_principle(self):
+        trades, analytics = self._reinforcement_inputs()
+        # One applied trade that follows the rule: not enough to clear it.
+        analytics["dailyPrices"] = [
+            {"securityId": 7, "priceDate": "2026-07-01", "closePrice": 100.0, "day5Return": 0.02},
+            {"securityId": 7, "priceDate": "2026-07-02", "closePrice": 101.0, "day5Return": 0.03},
+        ]
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        evaluation = report["principleEvaluations"][0]
+
+        self.assertEqual(evaluation["verdict"], "EARLY_SIGNAL")
+        self.assertEqual(report["principleEvaluationSummary"]["earlySignalCount"], 1)
+        self.assertEqual(report["principleEvaluationSummary"]["keepCount"], 0)
+        self.assertEqual(evaluation["statistics"]["sampleShortfall"], 3)
+        self.assertEqual(evaluation["statistics"]["evidenceStrength"], "PRELIMINARY")
+        self.assertIsNone(evaluation["suggestion"])
+
+    def test_small_outcome_samples_are_withheld_instead_of_averaged(self):
+        trades, analytics = self._reinforcement_inputs()
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        outcomes = report["principleEvaluations"][0]["outcomes"]
+
+        self.assertIsNone(outcomes["violated5dAveragePercent"])
+        self.assertEqual(outcomes["minimumSampleCount"], 3)
+        self.assertEqual(outcomes["sampleCounts"]["violated5d"], 2)
+
+    def test_violation_rate_carries_a_lower_bound_so_two_trades_cannot_look_certain(self):
+        trades, analytics = self._reinforcement_inputs()
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        statistics = report["principleEvaluations"][0]["statistics"]
+
+        self.assertEqual(statistics["violationRatePercent"], 100.0)
+        self.assertLess(statistics["violationRateLowerBoundPercent"], 100.0)
+
+    def test_principle_set_diagnostics_report_uncovered_trades_and_missing_sections(self):
+        trades, analytics = self._reinforcement_inputs()
+        trades = trades + [{
+            **self.trades[0],
+            "tradeId": 13,
+            "tradeSide": "SELL",
+            "tradedAt": "2026-07-03T09:00:00",
+            "appliedTradingDate": "2026-07-03",
+        }]
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        diagnostics = report["principleSetDiagnostics"]
+
+        self.assertEqual(diagnostics["principleCount"], 1)
+        self.assertEqual(diagnostics["coverage"]["uncoveredTradeCount"], 1)
+        self.assertIn(13, diagnostics["coverage"]["uncoveredTradeIds"])
+        self.assertEqual(
+            [item["sectionGroup"] for item in diagnostics["missingSections"]],
+            ["SELL"],
+        )
+        self.assertEqual(diagnostics["missingSections"][0]["relatedTradeCount"], 1)
+
+    def test_two_principles_bound_to_one_rule_are_reported_as_duplicates(self):
+        trades, analytics = self._reinforcement_inputs()
+        analytics["principleItems"] = analytics["principleItems"] + [{
+            "principleSetItemId": 10,
+            "principleText": "급등한 종목은 쳐다보지 않는다",
+            "ruleJson": {"entry": {"max_5day_return": 0.12}},
+            "sortOrder": 2,
+        }]
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        duplicates = report["principleSetDiagnostics"]["duplicateRules"]
+
+        self.assertEqual(len(duplicates), 1)
+        self.assertEqual(duplicates[0]["targetRule"], "entry.max_5day_return")
+        self.assertEqual(duplicates[0]["principleSetItemIds"], [9, 10])
+
+    def test_performance_context_surfaces_benchmark_and_random_distribution(self):
+        trades, analytics = self._reinforcement_inputs()
+        analytics["randomDistribution"] = {
+            "runCount": 4,
+            "distributionPercent": [-3.0, 1.0, 4.0, 9.0],
+            "medianReturnPercent": 2.5,
+            "personalBotPercentile": 100.0,
+        }
+        analytics["benchmarks"] = [
+            {"benchmark": "KOSPI", "returnPercent": 8.0, "method": "시장 지수 종가 기준"},
+        ]
+        analytics["securityContributions"] = [
+            {"variantId": 1, "securityId": 7, "securityName": "테스트전자", "contributionAmount": -120000.0},
+            {"variantId": 2, "securityId": 7, "securityName": "테스트전자", "contributionAmount": 50000.0},
+        ]
+
+        report = DeterministicReportAnalyzer().build(trades, self.participants, analytics)
+        context = report["performanceContext"]
+
+        self.assertEqual(context["luckCheck"]["actualUserPercentile"], 75.0)
+        self.assertEqual(context["benchmarks"][0]["actualExcessPercentPoint"], -3.0)
+        self.assertEqual(context["benchmarks"][0]["personalBotExcessPercentPoint"], 4.0)
+        # Only the user's own contributions belong in the user's report.
+        self.assertEqual(len(context["topSecurityContributions"]), 1)
+        self.assertEqual(context["topSecurityContributions"][0]["sharePercent"], 100.0)
 
     def test_comparator_reference_principles_are_secondary_limited_and_non_duplicate(self):
         participants = self.participants + [{

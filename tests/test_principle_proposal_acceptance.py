@@ -131,9 +131,13 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             )
 
         update = next(item for item in connection.fake_cursor.executions if item[0].startswith("UPDATE"))
-        self.assertEqual(json.loads(update[1][1]), {"entry": {"max_5day_return": 0.08}})
-        self.assertEqual(update[1][2], 9)
+        self.assertEqual(json.loads(update[1][0]), {"entry": {"max_5day_return": 0.08}})
+        self.assertEqual(update[1][1], 9)
         self.assertEqual(result["applicationType"], "REINFORCEMENT_UPDATED")
+        # The execution threshold is this service's to change; the sentence the
+        # user wrote belongs to the principle service and must survive intact.
+        self.assertNotIn("principle_text", update[0])
+        self.assertEqual(result["principleText"], "급등주를 추격매수하지 않는다")
 
     def test_v13_evaluation_suggestion_updates_the_principle_by_item_id(self):
         connection = FakeConnection([
@@ -171,8 +175,51 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             )
 
         update = next(item for item in connection.fake_cursor.executions if item[0].startswith("UPDATE"))
-        self.assertEqual(update[1][2], 9)
+        self.assertEqual(update[1][1], 9)
         self.assertEqual(result["principleSetItemId"], 9)
+        self.assertEqual(result["principleText"], "급등주를 추격매수하지 않는다")
+
+    def test_stable_evaluation_id_selects_the_proposal_without_a_recommendation_id(self):
+        connection = FakeConnection([
+            (9, "급등주를 추격매수하지 않는다", '{"entry":{"max_5day_return":0.15}}'),
+        ])
+        detail = {
+            "report_json": {
+                "reportVersion": "DETERMINISTIC_V13",
+                "principleEvaluations": [{
+                    "evaluationId": "PE_9_entry_max_5day_return",
+                    "principleSetItemId": 9,
+                    "verdict": "STRENGTHEN",
+                    "suggestion": {
+                        "recommendationId": 4001,
+                        "evaluationId": "PE_9_entry_max_5day_return",
+                        "proposalType": "REINFORCEMENT",
+                        "principleSetItemId": 9,
+                        "sourcePrincipleText": "급등주를 추격매수하지 않는다",
+                        "targetRule": "entry.max_5day_return",
+                        "ruleJson": {"entry": {"max_5day_return": 0.08}},
+                    },
+                }],
+            }
+        }
+        with patch(
+            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            return_value=detail,
+        ), patch(
+            "app.modules.simulation.db_persistence.get_db_connection",
+            return_value=connection,
+        ):
+            result = accept_principle_proposal(
+                AcceptPrincipleProposalRequest(
+                    simulationId=10,
+                    evaluationId="PE_9_entry_max_5day_return",
+                )
+            )
+
+        self.assertEqual(result["principleSetItemId"], 9)
+        # The stored proposal supplies the idempotency key, so a client that
+        # never sends a positional id still records the application correctly.
+        self.assertEqual(result["recommendationId"], 4001)
 
     def test_duplicate_request_returns_the_original_application_without_inserting(self):
         connection = FakeConnection(
