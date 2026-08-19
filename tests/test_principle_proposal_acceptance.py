@@ -135,6 +135,45 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         self.assertEqual(update[1][2], 9)
         self.assertEqual(result["applicationType"], "REINFORCEMENT_UPDATED")
 
+    def test_v13_evaluation_suggestion_updates_the_principle_by_item_id(self):
+        connection = FakeConnection([
+            (8, "같은 규칙의 이전 원칙", '{"entry":{"max_5day_return":0.20}}'),
+            (9, "급등주를 추격매수하지 않는다", '{"entry":{"max_5day_return":0.15}}'),
+        ])
+        detail = {
+            "report_json": {
+                "reportVersion": "DETERMINISTIC_V13",
+                "principleEvaluations": [{
+                    "evaluationId": "PE_9_entry_max_5day_return",
+                    "principleSetItemId": 9,
+                    "verdict": "STRENGTHEN",
+                    "suggestion": {
+                        "recommendationId": 4001,
+                        "proposalType": "REINFORCEMENT",
+                        "principleSetItemId": 9,
+                        "description": "최근 5일 8% 이상 급등한 종목은 진입을 보류합니다.",
+                        "sourcePrincipleText": "급등주를 추격매수하지 않는다",
+                        "targetRule": "entry.max_5day_return",
+                        "ruleJson": {"entry": {"max_5day_return": 0.08}},
+                    },
+                }],
+            }
+        }
+        with patch(
+            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            return_value=detail,
+        ), patch(
+            "app.modules.simulation.db_persistence.get_db_connection",
+            return_value=connection,
+        ):
+            result = accept_principle_proposal(
+                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=4001)
+            )
+
+        update = next(item for item in connection.fake_cursor.executions if item[0].startswith("UPDATE"))
+        self.assertEqual(update[1][2], 9)
+        self.assertEqual(result["principleSetItemId"], 9)
+
     def test_duplicate_request_returns_the_original_application_without_inserting(self):
         connection = FakeConnection(
             idempotency_duplicate=True,

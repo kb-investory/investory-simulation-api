@@ -3,7 +3,7 @@
 [API Endpoint Router] principles.py
 ================================================================================
 ■ 엔드포인트:
-  - POST /api/v1/principles/proposals/accept : 검증된 원칙 발굴·강화 제안 적용
+  - POST /api/v1/principles/proposals/accept : 검증된 기존 원칙 강화안 적용
   - GET  /api/v1/principles/recommendations : 성향 및 시뮬레이션 복기 기반 추천 원칙 목록 조회
   - POST /api/v1/principles                 : 추천된/사용자정의 원칙을 실제 사용자 활성 원칙으로 저장
 ================================================================================
@@ -60,7 +60,7 @@ def _merge_rule_json(base: dict, patch: dict) -> dict:
     return merged
 
 
-@router.post("/principles/proposals/accept", summary="원칙 발굴·강화 제안 적용")
+@router.post("/principles/proposals/accept", summary="원칙 평가 강화안 적용")
 def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
     """Apply only a server-stored and validated V3 proposal to the active principle set."""
     from app.modules.simulation.db_persistence import (
@@ -70,11 +70,17 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
-    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11", "DETERMINISTIC_V12"}:
+    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11", "DETERMINISTIC_V12", "DETERMINISTIC_V13"}:
         raise HTTPException(status_code=409, detail="새 분석 버전의 리포트를 먼저 조회해 주세요.")
+    evaluation_suggestions = [
+        item.get("suggestion")
+        for item in report.get("principleEvaluations", [])
+        if isinstance(item, dict) and isinstance(item.get("suggestion"), dict)
+    ]
     proposals = (
         report.get("principleDiscoveries", [])
         + report.get("principleReinforcements", [])
+        + evaluation_suggestions
     )
     proposal = next(
         (item for item in proposals if int(item.get("recommendationId") or 0) == req.recommendationId),
@@ -185,6 +191,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                     (principle_set_id,),
                 )
                 candidates = cur.fetchall()
+                requested_item_id = proposal.get("principleSetItemId")
                 source_text = str(proposal.get("sourcePrincipleText") or "").strip()
                 target_rule = str(proposal.get("targetRule") or "")
                 matched = None
@@ -195,6 +202,11 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                             candidate_rule = json.loads(candidate_rule)
                         except Exception:
                             candidate_rule = {}
+                    if requested_item_id is not None and int(candidate[0]) == int(requested_item_id):
+                        matched = (candidate, candidate_rule)
+                        break
+                    if requested_item_id is not None:
+                        continue
                     if (
                         source_text and str(candidate[1] or "").strip() == source_text
                     ) or _rule_path_exists(candidate_rule, target_rule):
