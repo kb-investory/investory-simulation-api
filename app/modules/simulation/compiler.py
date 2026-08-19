@@ -117,13 +117,19 @@ RULE_OUTPUT_SCHEMA = {
                         "type": "object", "additionalProperties": False,
                         "required": [
                             "user_natural_text",
-                            "ai_mapped_rule",
+                            "ai_mapped_rules",
                             "status",
                             "unmappable_reason",
                         ],
                         "properties": {
                             "user_natural_text": {"type": "string"},
-                            "ai_mapped_rule": {"type": "string"},
+                            # One sentence often carries several conditions.
+                            # Forcing it onto a single rule left the rest of the
+                            # sentence unenforced.
+                            "ai_mapped_rules": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "status": {"type": "string"},
                             # Empty when the principle did map. When it did not,
                             # this is the only thing standing between the user
@@ -306,17 +312,35 @@ class AIRuleCompiler:
         for item in audit.get("interpreted_principles") or []:
             if not isinstance(item, dict):
                 continue
-            mapped = str(item.get("ai_mapped_rule") or "").strip()
-            if mapped in valid_paths:
-                item["ai_mapped_rule"] = mapped
+            proposed = item.get("ai_mapped_rules")
+            if isinstance(proposed, str):
+                proposed = [proposed]
+            elif not isinstance(proposed, list):
+                proposed = []
+            if item.get("ai_mapped_rule"):
+                proposed = [item["ai_mapped_rule"], *proposed]
+
+            kept, dropped = [], False
+            for candidate in proposed:
+                path = str(candidate or "").strip()
+                if not path:
+                    continue
+                if path in valid_paths:
+                    if path not in kept:
+                        kept.append(path)
+                else:
+                    dropped = True
+
+            item["ai_mapped_rules"] = kept
+            item["ai_mapped_rule"] = kept[0] if kept else ""
+            if kept:
                 continue
-            item["ai_mapped_rule"] = ""
             item["status"] = "REVIEW_REQUIRED"
             if not str(item.get("unmappable_reason") or "").strip():
                 item["unmappable_reason"] = (
-                    "이 원칙에 해당하는 실행 규칙을 찾지 못해 직접 검토가 필요합니다."
-                    if not mapped
-                    else "AI가 지정한 실행 규칙이 유효하지 않아 직접 검토가 필요합니다."
+                    "AI가 지정한 실행 규칙이 유효하지 않아 직접 검토가 필요합니다."
+                    if dropped
+                    else "이 원칙에 해당하는 실행 규칙을 찾지 못해 직접 검토가 필요합니다."
                 )
 
     @staticmethod

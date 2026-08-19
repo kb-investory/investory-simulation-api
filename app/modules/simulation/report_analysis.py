@@ -327,6 +327,26 @@ def _rule_paths(rule_json: dict, prefix: str = "") -> List[str]:
     return paths
 
 
+def _mapped_rule_paths(matched: Optional[dict], item_paths: List[str]) -> List[str]:
+    """Every rule path one principle maps onto, in the compiler's order.
+
+    A single sentence often carries several conditions, and forcing it onto one
+    rule left the rest of the sentence unenforced.
+    """
+    matched = matched or {}
+    paths = matched.get("ai_mapped_rules") or matched.get("mappedRules") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    ordered = [str(path).strip() for path in paths if str(path).strip()]
+    primary = str(matched.get("ai_mapped_rule") or matched.get("mappedRule") or "").strip()
+    if primary and primary not in ordered:
+        ordered.insert(0, primary)
+    if not ordered and len(item_paths) == 1:
+        ordered = [item_paths[0]]
+    seen = set()
+    return [path for path in ordered if not (path in seen or seen.add(path))]
+
+
 def _resolve_current_value(
     target_rule: str,
     item_rule: dict,
@@ -388,18 +408,25 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
                     ),
                     None,
                 )
-            target_rule = str(
-                (matched or {}).get("ai_mapped_rule")
-                or (matched or {}).get("mappedRule")
-                or (item_paths[0] if len(item_paths) == 1 else "")
-            )
+            target_rules = _mapped_rule_paths(matched, item_paths)
+            target_rule = target_rules[0] if target_rules else ""
             current_value, value_source = _resolve_current_value(
                 target_rule, item_rule, rule_schema, confirmations
             )
+            rules = [
+                {
+                    "targetRule": path,
+                    "currentValue": _resolve_current_value(path, item_rule, rule_schema, confirmations)[0],
+                    "valueSource": _resolve_current_value(path, item_rule, rule_schema, confirmations)[1],
+                }
+                for path in target_rules
+            ]
             catalog.append({
                 "principleSetItemId": item.get("principleSetItemId") or item.get("principle_set_item_id"),
                 "principleText": text,
                 "targetRule": target_rule or None,
+                "targetRules": target_rules,
+                "rules": rules,
                 "status": str((matched or {}).get("status") or ("CONFIRMED" if target_rule else "REVIEW_REQUIRED")),
                 "currentValue": current_value,
                 "valueSource": value_source,
@@ -411,14 +438,25 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
     for index, item in enumerate(interpreted, 1):
         if not isinstance(item, dict):
             continue
-        target_rule = str(item.get("ai_mapped_rule") or item.get("mappedRule") or "")
+        target_rules = _mapped_rule_paths(item, [])
+        target_rule = target_rules[0] if target_rules else ""
         current_value, value_source = _resolve_current_value(
             target_rule, {}, rule_schema, confirmations
         )
+        rules = [
+            {
+                "targetRule": path,
+                "currentValue": _resolve_current_value(path, {}, rule_schema, confirmations)[0],
+                "valueSource": _resolve_current_value(path, {}, rule_schema, confirmations)[1],
+            }
+            for path in target_rules
+        ]
         catalog.append({
             "principleSetItemId": item.get("principle_set_item_id") or item.get("principleSetItemId"),
             "principleText": str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip(),
             "targetRule": target_rule or None,
+            "targetRules": target_rules,
+            "rules": rules,
             "status": str(item.get("status") or "CONFIRMED"),
             "currentValue": current_value,
             "valueSource": value_source,
@@ -493,15 +531,46 @@ def _build_principle_evaluations(
 
         followed = [review for review, match in related if match.get("judgment") == "FOLLOWED"]
         violated = [review for review, match in related if match.get("judgment") == "VIOLATED"]
+        value_source = str(principle.get("valueSource") or "MISSING")
+        # With several rules behind one principle, tighten the one that actually
+        # broke rather than whichever happened to be listed first.
+        violation_counts: Dict[str, int] = defaultdict(int)
+        for _, match in related:
+            for rule_result in match.get("ruleResults") or []:
+                if rule_result.get("judgment") == "VIOLATED" and rule_result.get("targetRule"):
+                    violation_counts[str(rule_result["targetRule"])] += 1
+        suggestion_rule = (
+            max(violation_counts.items(), key=lambda item: (item[1], item[0]))[0]
+            if violation_counts
+            else target_rule
+        )
+        suggestion_value = next(
+            (
+                rule.get("currentValue")
+                for rule in principle.get("rules") or []
+                if rule.get("targetRule") == suggestion_rule
+            ),
+            principle.get("currentValue"),
+        )
+        suggestion_value_source = next(
+            (
+                str(rule.get("valueSource") or "MISSING")
+                for rule in principle.get("rules") or []
+                if rule.get("targetRule") == suggestion_rule
+            ),
+            value_source,
+        )
         # The measured value on each followed trade is the band the user proved
         # they can stay inside. A proposal derived from it beats a constant.
         followed_actual_values = [
-            match["evidence"]["actualValue"]
+            rule_result["evidence"]["actualValue"]
             for _, match in related
-            if match.get("judgment") == "FOLLOWED"
-            and isinstance(match.get("evidence"), dict)
-            and isinstance(match["evidence"].get("actualValue"), (int, float))
-            and not isinstance(match["evidence"].get("actualValue"), bool)
+            for rule_result in (match.get("ruleResults") or [])
+            if rule_result.get("targetRule") == suggestion_rule
+            and rule_result.get("judgment") == "FOLLOWED"
+            and isinstance(rule_result.get("evidence"), dict)
+            and isinstance(rule_result["evidence"].get("actualValue"), (int, float))
+            and not isinstance(rule_result["evidence"].get("actualValue"), bool)
         ]
         applicable_count = len(followed) + len(violated)
         violation_rate = round(len(violated) / applicable_count * 100, 1) if applicable_count else None
@@ -509,7 +578,6 @@ def _build_principle_evaluations(
         followed_20d = [value for item in followed if (value := _directional_return(item, "return20dPercent")) is not None]
         violated_5d = [value for item in violated if (value := _directional_return(item, "return5dPercent")) is not None]
         violated_20d = [value for item in violated if (value := _directional_return(item, "return20dPercent")) is not None]
-        value_source = str(principle.get("valueSource") or "MISSING")
         violation_lower_bound = _wilson_lower_bound(len(violated), applicable_count)
         evidence_strength = _evidence_strength(applicable_count, violation_lower_bound)
         status = str(principle.get("status") or "REVIEW_REQUIRED")
@@ -521,7 +589,7 @@ def _build_principle_evaluations(
             verdict = "INSUFFICIENT_DATA"
             reason = f"평가 가능한 거래가 {applicable_count}건이라 원칙을 변경하기에는 데이터가 부족합니다."
         elif len(violated) >= 2 and (violation_rate or 0) >= STRENGTHEN_VIOLATION_RATE:
-            if value_source == "AI_INFERRED":
+            if suggestion_value_source == "AI_INFERRED":
                 # The repeated violation is real, but it was measured against a
                 # number the compiler invented because the sentence had none.
                 # Ask the user what the bar is before proposing to tighten it.
@@ -564,8 +632,8 @@ def _build_principle_evaluations(
         suggestion = None
         if verdict == "STRENGTHEN":
             proposal = build_strengthen_proposal(
-                target_rule,
-                principle.get("currentValue"),
+                suggestion_rule,
+                suggestion_value,
                 followed_actual_values,
             )
             if proposal:
@@ -575,19 +643,19 @@ def _build_principle_evaluations(
                 rule_json = (
                     {}
                     if proposal["changeType"] == "ENFORCEMENT_REINFORCEMENT"
-                    else _rule_json(target_rule, proposed_value)
+                    else _rule_json(suggestion_rule, proposed_value)
                 )
                 suggestion = {
                     "recommendationId": 4000 + index,
                     "evaluationId": evaluation_id,
-                    "opportunityId": f"PRINCIPLE:{principle_id or index}:{target_rule}",
+                    "opportunityId": f"PRINCIPLE:{principle_id or index}:{suggestion_rule}",
                     "proposalType": "REINFORCEMENT",
                     "principleSetItemId": principle_id,
                     "principleType": proposal["principleType"],
                     "title": proposal["title"],
                     "description": proposal["description"],
                     "sourcePrincipleText": principle_text,
-                    "targetRule": target_rule,
+                    "targetRule": suggestion_rule,
                     "currentValue": proposal["currentValue"],
                     "proposedValue": proposed_value,
                     "allowedMinimum": proposal["allowedMinimum"],
@@ -613,6 +681,7 @@ def _build_principle_evaluations(
             "principleSetItemId": principle_id,
             "principleText": principle_text,
             "targetRule": target_rule,
+            "targetRules": principle.get("targetRules") or ([target_rule] if target_rule else []),
             "currentValue": principle.get("currentValue"),
             "valueSource": value_source,
             "verdict": verdict,
@@ -990,6 +1059,92 @@ def _numeric_rule_match(
         ),
         {"actualValue": actual_number, "ruleValue": rule_number, "operator": operator},
     )
+
+
+def _combine_rule_results(principle: dict, trade: dict, results: List[dict]) -> dict:
+    """Fold one principle's several rule checks into a single judgment.
+
+    A sentence like "only buy liquid names that have not spiked" is two rules,
+    and a person reading it means both. Breaking the failure of either one is
+    breaking the principle, so any violation carries; a principle counts as
+    followed only when something applied and nothing broke.
+    """
+    judgments = [item["judgment"] for item in results]
+    if "VIOLATED" in judgments:
+        combined = "VIOLATED"
+    elif "FOLLOWED" in judgments:
+        combined = "FOLLOWED"
+    elif judgments and all(item == "NOT_APPLICABLE" for item in judgments):
+        combined = "NOT_APPLICABLE"
+    else:
+        combined = "INSUFFICIENT_DATA"
+
+    representative = next(
+        (item for item in results if item["judgment"] == combined),
+        results[0] if results else {},
+    )
+    rule_results = [
+        {
+            "targetRule": item.get("targetRule"),
+            "applicability": item.get("applicability"),
+            "judgment": item.get("judgment"),
+            "reason": item.get("reason"),
+            "evidence": item.get("evidence") or {},
+        }
+        for item in results
+    ]
+    reason = str(representative.get("reason") or "")
+    if len(results) > 1 and representative.get("targetRule"):
+        reason = f"[{representative['targetRule']}] {reason}"
+    return {
+        "principleSetItemId": principle.get("principleSetItemId"),
+        "principleText": principle.get("principleText") or "투자 원칙",
+        "targetRule": representative.get("targetRule") or principle.get("targetRule"),
+        "targetRules": [item.get("targetRule") for item in results],
+        "applicability": "APPLICABLE" if combined in {"FOLLOWED", "VIOLATED"} else combined,
+        "judgment": combined,
+        "expectedAction": representative.get("expectedAction"),
+        "actualAction": str(trade.get("tradeSide") or "HOLD"),
+        "reason": reason,
+        "evidence": representative.get("evidence") or {},
+        "ruleResults": rule_results,
+        "matchingMethod": "RULE_PREDICATE_AT_TRADE_TIME",
+    }
+
+
+def _evaluate_principle_matches(
+    principle: dict,
+    trade: dict,
+    context: dict,
+    rule_schema: dict,
+    evidence_codes: List[str],
+) -> dict:
+    """Judge every rule this principle maps onto, then combine them."""
+    rules = principle.get("rules") or []
+    if not rules:
+        return _evaluate_principle_for_trade(principle, trade, context, rule_schema, evidence_codes)
+    results = []
+    for rule in rules:
+        single = {
+            **principle,
+            "targetRule": rule.get("targetRule"),
+            "currentValue": rule.get("currentValue"),
+            "status": rule.get("status", principle.get("status")),
+        }
+        result = _evaluate_principle_for_trade(single, trade, context, rule_schema, evidence_codes)
+        result["targetRule"] = rule.get("targetRule")
+        results.append(result)
+    if len(results) == 1:
+        results[0]["targetRules"] = [results[0].get("targetRule")]
+        results[0]["ruleResults"] = [{
+            "targetRule": results[0].get("targetRule"),
+            "applicability": results[0].get("applicability"),
+            "judgment": results[0].get("judgment"),
+            "reason": results[0].get("reason"),
+            "evidence": results[0].get("evidence") or {},
+        }]
+        return results[0]
+    return _combine_rule_results(principle, trade, results)
 
 
 def _evaluate_principle_for_trade(
@@ -1451,7 +1606,7 @@ class DeterministicReportAnalyzer:
             matched_code = next((code for code in PATTERN_CONFIG if code in codes), None)
             config = PATTERN_CONFIG.get(matched_code or "")
             principle_matches = [
-                _evaluate_principle_for_trade(
+                _evaluate_principle_matches(
                     principle_item,
                     trade,
                     principle_match_context,

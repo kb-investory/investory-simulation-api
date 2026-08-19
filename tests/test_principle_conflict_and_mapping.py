@@ -14,13 +14,14 @@ class MappedRuleNormalizationTests(unittest.TestCase):
 
     def test_a_valid_dotted_path_is_kept(self):
         data = self._audit([
-            {"user_natural_text": "급등주 금지", "ai_mapped_rule": "entry.max_5day_return",
+            {"user_natural_text": "급등주 금지", "ai_mapped_rules": ["entry.max_5day_return"],
              "status": "CONFIRMED", "unmappable_reason": ""},
         ])
 
         AIRuleCompiler._normalize_mapped_rules(data)
         item = data["audit"]["interpreted_principles"][0]
 
+        self.assertEqual(item["ai_mapped_rules"], ["entry.max_5day_return"])
         self.assertEqual(item["ai_mapped_rule"], "entry.max_5day_return")
         self.assertEqual(item["status"], "CONFIRMED")
 
@@ -29,7 +30,7 @@ class MappedRuleNormalizationTests(unittest.TestCase):
         # silently, while the screen claims the principle is being enforced.
         data = self._audit([
             {"user_natural_text": "급등주 금지",
-             "ai_mapped_rule": "급등주에 대한 추격매수 금지 원칙 적용(트렌드 기반)",
+             "ai_mapped_rules": ["급등주에 대한 추격매수 금지 원칙 적용(트렌드 기반)"],
              "status": "CONFIRMED", "unmappable_reason": ""},
         ])
 
@@ -43,7 +44,7 @@ class MappedRuleNormalizationTests(unittest.TestCase):
     def test_a_plausible_but_nonexistent_path_is_also_demoted(self):
         data = self._audit([
             {"user_natural_text": "실적 발표 전 매수 금지",
-             "ai_mapped_rule": "entry.avoid_before_earnings",
+             "ai_mapped_rules": ["entry.avoid_before_earnings"],
              "status": "CONFIRMED", "unmappable_reason": ""},
         ])
 
@@ -53,7 +54,7 @@ class MappedRuleNormalizationTests(unittest.TestCase):
 
     def test_an_existing_unmappable_reason_is_not_overwritten(self):
         data = self._audit([
-            {"user_natural_text": "실적 발표 전 매수 금지", "ai_mapped_rule": "",
+            {"user_natural_text": "실적 발표 전 매수 금지", "ai_mapped_rules": [],
              "status": "REVIEW_REQUIRED",
              "unmappable_reason": "실적 발표일 데이터가 시스템에 없습니다."},
         ])
@@ -64,6 +65,35 @@ class MappedRuleNormalizationTests(unittest.TestCase):
             data["audit"]["interpreted_principles"][0]["unmappable_reason"],
             "실적 발표일 데이터가 시스템에 없습니다.",
         )
+
+    def test_several_conditions_in_one_sentence_all_survive(self):
+        data = self._audit([
+            {"user_natural_text": "급등하지 않았고 거래대금이 충분한 종목만 산다",
+             "ai_mapped_rules": ["entry.max_5day_return", "universe.min_daily_trading_value"],
+             "status": "CONFIRMED", "unmappable_reason": ""},
+        ])
+
+        AIRuleCompiler._normalize_mapped_rules(data)
+        item = data["audit"]["interpreted_principles"][0]
+
+        self.assertEqual(
+            item["ai_mapped_rules"],
+            ["entry.max_5day_return", "universe.min_daily_trading_value"],
+        )
+        self.assertEqual(item["status"], "CONFIRMED")
+
+    def test_one_bad_path_does_not_discard_the_valid_ones(self):
+        data = self._audit([
+            {"user_natural_text": "급등 안 했고 실적 발표 전이 아닌 종목만",
+             "ai_mapped_rules": ["entry.max_5day_return", "entry.avoid_before_earnings"],
+             "status": "CONFIRMED", "unmappable_reason": ""},
+        ])
+
+        AIRuleCompiler._normalize_mapped_rules(data)
+        item = data["audit"]["interpreted_principles"][0]
+
+        self.assertEqual(item["ai_mapped_rules"], ["entry.max_5day_return"])
+        self.assertEqual(item["status"], "CONFIRMED")
 
     def test_the_prompt_lists_exactly_the_paths_the_schema_defines(self):
         from app.modules.simulation.prompts import SYSTEM_COMPILER_PROMPT
@@ -215,3 +245,79 @@ class SchemaRoundTripTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MultiRulePrincipleTests(unittest.TestCase):
+    """One sentence, several conditions: breaking either one breaks the principle."""
+
+    def _report(self, day5_return, trading_value):
+        analytics = {
+            "ruleSchema": {
+                "entry": {"max_5day_return": 0.10},
+                "universe": {"min_daily_trading_value": 1_000_000_000.0},
+                "audit": {"interpreted_principles": [{
+                    "user_natural_text": "급등하지 않았고 거래대금이 충분한 종목만 산다",
+                    "ai_mapped_rule": "entry.max_5day_return",
+                    "ai_mapped_rules": [
+                        "entry.max_5day_return",
+                        "universe.min_daily_trading_value",
+                    ],
+                    "status": "CONFIRMED",
+                    "unmappable_reason": "",
+                }]},
+            },
+            "principleItems": [{
+                "principleSetItemId": 9,
+                "principleText": "급등하지 않았고 거래대금이 충분한 종목만 산다",
+                "ruleJson": {}, "sortOrder": 1,
+            }],
+            "dailyPrices": [{
+                "securityId": 7, "priceDate": "2026-07-01", "closePrice": 100.0,
+                "day5Return": day5_return, "tradingValue": trading_value,
+            }],
+        }
+        trades = [{
+            "tradeId": 11, "variantId": 1, "securityId": 7, "securityName": "테스트",
+            "tradeSide": "BUY", "tradedAt": "2026-07-01T09:00:00",
+            "appliedTradingDate": "2026-07-01",
+        }]
+        participants = [
+            {"variantId": 1, "variantType": "ACTUAL_USER", "cumulativeReturnPercent": 0.0},
+            {"variantId": 2, "variantType": "PERSONAL_BOT", "cumulativeReturnPercent": 0.0},
+        ]
+        return DeterministicReportAnalyzer().build(trades, participants, analytics)
+
+    def _match(self, report):
+        return report["decisionReviews"][0]["principleMatches"][0]
+
+    def test_both_conditions_are_checked_not_just_the_first(self):
+        # Passes the spike rule, fails the liquidity rule. Before multi-rule
+        # mapping only the first condition existed and this read as FOLLOWED.
+        match = self._match(self._report(day5_return=0.02, trading_value=3_000_000.0))
+
+        self.assertEqual(match["judgment"], "VIOLATED")
+        self.assertEqual(len(match["ruleResults"]), 2)
+        self.assertEqual(
+            {item["targetRule"]: item["judgment"] for item in match["ruleResults"]},
+            {"entry.max_5day_return": "FOLLOWED",
+             "universe.min_daily_trading_value": "VIOLATED"},
+        )
+        # The reason names which of the two conditions broke.
+        self.assertIn("universe.min_daily_trading_value", match["reason"])
+
+    def test_following_every_condition_counts_as_following_the_principle(self):
+        match = self._match(self._report(day5_return=0.02, trading_value=5_000_000_000.0))
+
+        self.assertEqual(match["judgment"], "FOLLOWED")
+        self.assertEqual(
+            [item["judgment"] for item in match["ruleResults"]],
+            ["FOLLOWED", "FOLLOWED"],
+        )
+
+    def test_the_evaluation_lists_every_rule_the_principle_is_bound_to(self):
+        evaluation = self._report(day5_return=0.02, trading_value=5_000_000_000.0)["principleEvaluations"][0]
+
+        self.assertEqual(
+            evaluation["targetRules"],
+            ["entry.max_5day_return", "universe.min_daily_trading_value"],
+        )

@@ -77,8 +77,11 @@ class RebalanceRule:
 class AuditPrincipleItem:
     """8-1. AI 자연어 해석 결과 개별 내역"""
     user_natural_text: str
+    # 대표 규칙 경로. 하위 호환을 위해 유지하며 ai_mapped_rules의 첫 항목과 같습니다.
     ai_mapped_rule: str
     status: str = "CONFIRMED"
+    # 한 원칙이 여러 조건을 담을 수 있으므로 매핑된 경로 전체를 보관합니다.
+    ai_mapped_rules: List[str] = field(default_factory=list)
     # 실행 규칙으로 만들 수 없을 때 그 사유. 매핑에 성공하면 빈 문자열입니다.
     unmappable_reason: str = ""
 
