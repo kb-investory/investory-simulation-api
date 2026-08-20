@@ -158,5 +158,84 @@ class InferredThresholdVerdictTests(unittest.TestCase):
         self.assertEqual(report["principleEvaluations"][0]["verdict"], "EARLY_SIGNAL")
 
 
+
+class StatedThresholdTests(unittest.TestCase):
+    """사용자가 문장에 직접 쓴 숫자는 AI 추정이 아니다."""
+
+    def test_a_number_written_in_the_sentence_is_the_users_own(self):
+        value, source = _resolve_current_value(
+            "exit.stop_loss_rate", {}, {"exit": {"stop_loss_rate": -0.12}}, {},
+            stated_rules={"exit.stop_loss_rate"},
+        )
+
+        self.assertEqual(value, -0.12)
+        self.assertEqual(source, "USER_STATED")
+
+    def test_a_rule_the_user_did_not_state_stays_inferred(self):
+        value, source = _resolve_current_value(
+            "entry.max_5day_return", {}, {"entry": {"max_5day_return": 0.15}}, {},
+            stated_rules={"exit.stop_loss_rate"},
+        )
+
+        self.assertEqual(source, "AI_INFERRED")
+
+    def test_an_explicit_confirmation_still_outranks_a_stated_value(self):
+        value, source = _resolve_current_value(
+            "exit.stop_loss_rate", {}, {"exit": {"stop_loss_rate": -0.12}},
+            {"exit.stop_loss_rate": -0.08}, stated_rules={"exit.stop_loss_rate"},
+        )
+
+        self.assertEqual(value, -0.08)
+        self.assertEqual(source, "USER_CONFIRMED")
+
+
+class StatedRuleVerificationTests(unittest.TestCase):
+    """stated 라고 주장했다고 그대로 믿지 않는다."""
+
+    def _verify(self, text, claimed, mapped):
+        from app.modules.simulation.compiler import AIRuleCompiler
+        return AIRuleCompiler._verified_stated_rules(
+            {"user_natural_text": text, "stated_rules": claimed}, mapped
+        )
+
+    def test_a_numeric_rule_needs_a_number_in_the_sentence(self):
+        kept = self._verify("손실이 12%에 도달하면 매도한다",
+                            ["exit.stop_loss_rate"], ["exit.stop_loss_rate"])
+        self.assertEqual(kept, ["exit.stop_loss_rate"])
+
+    def test_a_numeric_claim_without_any_number_is_rejected(self):
+        # "손실이 커지면 판다" 에는 기준이 없으므로 사용자가 정한 값이 아니다.
+        kept = self._verify("손실이 커지면 판다",
+                            ["exit.stop_loss_rate"], ["exit.stop_loss_rate"])
+        self.assertEqual(kept, [])
+
+    def test_a_boolean_rule_can_be_stated_without_digits(self):
+        kept = self._verify("물타기는 하지 않는다",
+                            ["additional_buy.allowed"], ["additional_buy.allowed"])
+        self.assertEqual(kept, ["additional_buy.allowed"])
+
+    def test_a_rule_the_principle_does_not_map_onto_is_dropped(self):
+        kept = self._verify("손실이 12%면 매도",
+                            ["entry.max_5day_return"], ["exit.stop_loss_rate"])
+        self.assertEqual(kept, [])
+
+
+class StatedThresholdVerdictTests(InferredThresholdVerdictTests):
+    """문장에 기준을 쓴 원칙은 확인 요구 없이 바로 강화된다."""
+
+    def test_a_stated_threshold_goes_straight_to_strengthen(self):
+        analytics = self._analytics({})
+        analytics["ruleSchema"]["audit"]["interpreted_principles"][0]["stated_rules"] = [
+            "entry.max_5day_return"
+        ]
+
+        report = DeterministicReportAnalyzer().build(self.trades, self.participants, analytics)
+        evaluation = report["principleEvaluations"][0]
+
+        self.assertEqual(evaluation["valueSource"], "USER_STATED")
+        self.assertEqual(evaluation["verdict"], "STRENGTHEN")
+        self.assertIsNotNone(evaluation["suggestion"])
+        self.assertEqual(report["principleEvaluationSummary"]["confirmThresholdCount"], 0)
+
 if __name__ == "__main__":
     unittest.main()

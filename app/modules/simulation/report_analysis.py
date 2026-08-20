@@ -347,11 +347,20 @@ def _mapped_rule_paths(matched: Optional[dict], item_paths: List[str]) -> List[s
     return [path for path in ordered if not (path in seen or seen.add(path))]
 
 
+def _stated_rule_paths(matched: Optional[dict]) -> set:
+    """규칙 중 사용자가 원문에 기준을 직접 밝힌 것들."""
+    paths = (matched or {}).get("stated_rules") or (matched or {}).get("statedRules") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    return {str(path).strip() for path in paths if str(path).strip()}
+
+
 def _resolve_current_value(
     target_rule: str,
     item_rule: dict,
     rule_schema: dict,
     confirmations: dict,
+    stated_rules: Optional[set] = None,
 ) -> tuple[object, str]:
     """Find the threshold to judge against, and say where it came from.
 
@@ -369,6 +378,11 @@ def _resolve_current_value(
         return from_principle, "PRINCIPLE_RULE_JSON"
     from_schema = _nested_value(rule_schema, target_rule)
     if from_schema is not None:
+        # The compiler read this number out of the user's own sentence. Parsing
+        # what someone wrote is not the same as inventing it, so it does not
+        # need to be confirmed back to them.
+        if stated_rules and target_rule in stated_rules:
+            return from_schema, "USER_STATED"
         return from_schema, "AI_INFERRED"
     return None, "MISSING"
 
@@ -410,17 +424,16 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
                 )
             target_rules = _mapped_rule_paths(matched, item_paths)
             target_rule = target_rules[0] if target_rules else ""
+            stated = _stated_rule_paths(matched)
             current_value, value_source = _resolve_current_value(
-                target_rule, item_rule, rule_schema, confirmations
+                target_rule, item_rule, rule_schema, confirmations, stated
             )
-            rules = [
-                {
-                    "targetRule": path,
-                    "currentValue": _resolve_current_value(path, item_rule, rule_schema, confirmations)[0],
-                    "valueSource": _resolve_current_value(path, item_rule, rule_schema, confirmations)[1],
-                }
-                for path in target_rules
-            ]
+            rules = []
+            for path in target_rules:
+                value, source = _resolve_current_value(
+                    path, item_rule, rule_schema, confirmations, stated
+                )
+                rules.append({"targetRule": path, "currentValue": value, "valueSource": source})
             catalog.append({
                 "principleSetItemId": item.get("principleSetItemId") or item.get("principle_set_item_id"),
                 "principleText": text,
@@ -440,17 +453,14 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
             continue
         target_rules = _mapped_rule_paths(item, [])
         target_rule = target_rules[0] if target_rules else ""
+        stated = _stated_rule_paths(item)
         current_value, value_source = _resolve_current_value(
-            target_rule, {}, rule_schema, confirmations
+            target_rule, {}, rule_schema, confirmations, stated
         )
-        rules = [
-            {
-                "targetRule": path,
-                "currentValue": _resolve_current_value(path, {}, rule_schema, confirmations)[0],
-                "valueSource": _resolve_current_value(path, {}, rule_schema, confirmations)[1],
-            }
-            for path in target_rules
-        ]
+        rules = []
+        for path in target_rules:
+            value, source = _resolve_current_value(path, {}, rule_schema, confirmations, stated)
+            rules.append({"targetRule": path, "currentValue": value, "valueSource": source})
         catalog.append({
             "principleSetItemId": item.get("principle_set_item_id") or item.get("principleSetItemId"),
             "principleText": str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip(),

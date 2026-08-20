@@ -15,6 +15,7 @@ from app.modules.simulation.prompts import SYSTEM_COMPILER_PROMPT, build_user_co
 from app.modules.simulation.rule_schema import (
     InvestmentBotStrategySchema,
     executable_rule_paths,
+    numeric_rule_paths,
 )
 
 
@@ -118,6 +119,7 @@ RULE_OUTPUT_SCHEMA = {
                         "required": [
                             "user_natural_text",
                             "ai_mapped_rules",
+                            "stated_rules",
                             "status",
                             "unmappable_reason",
                         ],
@@ -127,6 +129,13 @@ RULE_OUTPUT_SCHEMA = {
                             # Forcing it onto a single rule left the rest of the
                             # sentence unenforced.
                             "ai_mapped_rules": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            # 사용자가 문장에 기준을 직접 쓴 규칙. 문장에서 숫자를
+                            # 읽어낸 것은 추정이 아니라 파싱이므로, 그 값으로는
+                            # 확인 없이 평가하고 강화안도 제안할 수 있습니다.
+                            "stated_rules": {
                                 "type": "array",
                                 "items": {"type": "string"},
                             },
@@ -333,6 +342,7 @@ class AIRuleCompiler:
 
             item["ai_mapped_rules"] = kept
             item["ai_mapped_rule"] = kept[0] if kept else ""
+            item["stated_rules"] = AIRuleCompiler._verified_stated_rules(item, kept)
             if kept:
                 continue
             item["status"] = "REVIEW_REQUIRED"
@@ -342,6 +352,36 @@ class AIRuleCompiler:
                     if dropped
                     else "이 원칙에 해당하는 실행 규칙을 찾지 못해 직접 검토가 필요합니다."
                 )
+
+    @staticmethod
+    def _verified_stated_rules(item: dict, mapped: List[str]) -> List[str]:
+        """Keep only the rules whose value the user really did write down.
+
+        A value marked as stated skips the confirmation gate and can drive a
+        violation verdict, so the claim is checked rather than trusted: it must
+        be a rule this principle actually maps onto, and for a numeric rule the
+        sentence has to contain a number. Boolean and enum rules are exempt
+        because "물타기는 하지 않는다" states a value without any digits.
+        """
+        claimed = item.get("stated_rules")
+        if isinstance(claimed, str):
+            claimed = [claimed]
+        elif not isinstance(claimed, list):
+            claimed = []
+        text = str(item.get("user_natural_text") or "")
+        has_number = any(character.isdigit() for character in text)
+        numeric = set(numeric_rule_paths())
+        mapped_set = set(mapped)
+
+        verified = []
+        for candidate in claimed:
+            path = str(candidate or "").strip()
+            if path not in mapped_set or path in verified:
+                continue
+            if path in numeric and not has_number:
+                continue
+            verified.append(path)
+        return verified
 
     @staticmethod
     def _drop_unanchored_conflicts(data: dict, principles: List[str]) -> None:

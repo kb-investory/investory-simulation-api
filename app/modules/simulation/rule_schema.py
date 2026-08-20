@@ -82,6 +82,10 @@ class AuditPrincipleItem:
     status: str = "CONFIRMED"
     # 한 원칙이 여러 조건을 담을 수 있으므로 매핑된 경로 전체를 보관합니다.
     ai_mapped_rules: List[str] = field(default_factory=list)
+    # 사용자가 원문에 기준을 직접 밝힌 규칙 경로. ai_mapped_rules 의 부분집합입니다.
+    # "손실이 12%에 도달하면 손절" 처럼 문장에 값이 있으면 그 값은 AI 추정이 아니라
+    # 사용자가 정한 기준이므로, 확인 없이 평가와 강화에 사용할 수 있습니다.
+    stated_rules: List[str] = field(default_factory=list)
     # 실행 규칙으로 만들 수 없을 때 그 사유. 매핑에 성공하면 빈 문자열입니다.
     unmappable_reason: str = ""
 
@@ -176,4 +180,20 @@ def executable_rule_paths() -> List[str]:
         for section, values in schema.items()
         if section != "audit" and isinstance(values, dict)
         for field in values
+    )
+
+
+def numeric_rule_paths() -> List[str]:
+    """수치로 표현되는 규칙 경로.
+
+    사용자가 원문에 숫자를 적었는지 검증할 때 씁니다. 참·거짓이나 열거형 규칙은
+    숫자 없이도 문장에서 명시될 수 있으므로("물타기는 하지 않는다") 제외합니다.
+    """
+    schema = InvestmentBotStrategySchema().to_dict()
+    return sorted(
+        f"{section}.{field}"
+        for section, values in schema.items()
+        if section != "audit" and isinstance(values, dict)
+        for field, value in values.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
     )
