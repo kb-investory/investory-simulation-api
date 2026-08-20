@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from app.api.v1.endpoints.principles import (
+from app.api.endpoints.principles import (
     AcceptPrincipleProposalRequest,
     accept_principle_proposal,
 )

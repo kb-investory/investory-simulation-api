@@ -4,20 +4,20 @@
 ================================================================================
 ■ 역할:
   - Investory 통합 AI 및 시뮬레이션 백엔드 서버의 메인 애플리케이션 진입점입니다.
-  - CORS 설정, Swagger UI 문서화 정보, REST API v1 라우터 마운트 및 헬스체크를 담당합니다.
+  - CORS 설정, Swagger UI 문서화 정보, REST API 라우터 마운트 및 헬스체크를 담당합니다.
 ================================================================================
 """
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
-from app.api.v1.router import api_v1_router
+from app.api.router import api_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="Investory 개인 투자봇 시뮬레이션 & 6개 축 투자 성향 분석 통합 AI 백엔드 서버 API Documentation",
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    openapi_url=f"{settings.API_PREFIX}/openapi.json",
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -32,8 +32,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# REST API v1 라우터 마운트
-app.include_router(api_v1_router, prefix=settings.API_V1_STR)
+# REST API 라우터 마운트
+app.include_router(api_router, prefix=settings.API_PREFIX)
 
 @app.on_event("startup")
 def startup_event():

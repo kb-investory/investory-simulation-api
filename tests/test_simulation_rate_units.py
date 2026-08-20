@@ -1,6 +1,6 @@
 import unittest
 
-from app.api.v1.endpoints.simulation_helpers import normalize_daily_snapshot
+from app.api.endpoints.simulation_helpers import normalize_daily_snapshot
 from app.modules.simulation.backtest import BacktestEngine
 from app.modules.simulation.models import VirtualOrder
 from app.modules.simulation.strategies import BaseStrategy

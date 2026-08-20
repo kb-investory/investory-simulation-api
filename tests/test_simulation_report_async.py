@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from fastapi import BackgroundTasks
 
-from app.api.v1.endpoints import simulation
+from app.api.endpoints import simulation
 from app.modules.simulation.report_generator import SimulationReportGenerator
 
 
