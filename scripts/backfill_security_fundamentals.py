@@ -5,6 +5,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import sys
+from pathlib import Path
+
+# Add project root to sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.modules.simulation.fundamentals_collector import FundamentalsCollector
 

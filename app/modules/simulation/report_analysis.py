@@ -745,6 +745,111 @@ def _build_principle_evaluations(
     return evaluations, reinforcements
 
 
+PERSONAL_BOT_VARIANT_ID = 2
+# 매수는 오른 만큼, 매도는 내린 만큼이 잘한 것입니다. 관망은 0점입니다.
+ACTION_DIRECTION = {"BUY": 1.0, "ADD": 1.0, "SELL": -1.0, "REDUCE": -1.0, "HOLD": 0.0}
+
+
+def _action_score(actions: List[str], return_percent: Optional[float]) -> Optional[float]:
+    """Score one side's action by the move that followed it."""
+    if return_percent is None:
+        return None
+    direction = next(
+        (ACTION_DIRECTION[action] for action in actions if action in ACTION_DIRECTION),
+        0.0,
+    )
+    return round(direction * float(return_percent), 2)
+
+
+def _build_divergence_review(
+    analytics: dict,
+    simulated_trades: List[dict],
+    decision_reviews: List[dict],
+    outcome_evidence: dict,
+) -> dict:
+    """Where the user and their own principle bot acted differently, and how each fared.
+
+    This does not claim the moments below add up to the performance gap: they are
+    the points where the two split, scored one at a time. Attributing the whole
+    difference to them would be arithmetic the data does not support.
+    """
+    securities = {
+        int(item.get("securityId") or item.get("security_id") or 0): item
+        for item in analytics.get("securitySnapshots") or []
+    }
+    bot_reason_by_key: Dict[tuple, str] = {}
+    for trade in simulated_trades:
+        if _variant_id(trade) != PERSONAL_BOT_VARIANT_ID:
+            continue
+        key = (_trade_date(trade), int(trade.get("securityId") or trade.get("security_id") or 0))
+        reason = str(trade.get("decisionReason") or trade.get("rationaleText") or "").strip()
+        if reason:
+            bot_reason_by_key.setdefault(key, reason)
+
+    violations_by_key: Dict[tuple, List[dict]] = defaultdict(list)
+    for review in decision_reviews:
+        key = (str(review.get("tradedAt") or "")[:10], int(review.get("securityId") or 0))
+        for match in review.get("principleMatches", []):
+            if match.get("judgment") == "VIOLATED":
+                violations_by_key[key].append({
+                    "principleSetItemId": match.get("principleSetItemId"),
+                    "principleText": match.get("principleText"),
+                    "targetRule": match.get("targetRule"),
+                    "reason": match.get("reason"),
+                })
+
+    moments = []
+    for moment in analytics.get("divergenceMoments") or []:
+        date = str(moment.get("date") or "")[:10]
+        security_id = int(moment.get("securityId") or 0)
+        key = (date, security_id)
+        user_actions = list(moment.get("actualUserActions") or ["HOLD"])
+        bot_actions = list(moment.get("personalBotActions") or ["HOLD"])
+        return_percent = moment.get("subsequent5TradingDayReturnPercent")
+        user_score = _action_score(user_actions, return_percent)
+        bot_score = _action_score(bot_actions, return_percent)
+        if user_score is None or bot_score is None:
+            better = "UNKNOWN"
+        elif user_score > bot_score:
+            better = "ACTUAL_USER"
+        elif bot_score > user_score:
+            better = "PERSONAL_BOT"
+        else:
+            better = "TIED"
+        moments.append({
+            "date": date,
+            "securityId": security_id,
+            "securityName": securities.get(security_id, {}).get("securityName") or f"종목 {security_id}",
+            "userActions": user_actions,
+            "botActions": bot_actions,
+            "botReason": bot_reason_by_key.get(key),
+            "return5dPercent": return_percent,
+            "userScore": user_score,
+            "botScore": bot_score,
+            "betterSide": better,
+            "violatedPrinciples": violations_by_key.get(key, []),
+        })
+
+    counts = defaultdict(int)
+    for item in moments:
+        counts[item["betterSide"]] += 1
+    return {
+        "gapPercentPoint": outcome_evidence.get("principleBotGapPercentPoint"),
+        "momentCount": len(moments),
+        "botBetterCount": counts["PERSONAL_BOT"],
+        "userBetterCount": counts["ACTUAL_USER"],
+        "tiedCount": counts["TIED"],
+        "undeterminedCount": counts["UNKNOWN"],
+        "moments": moments,
+        "measurementPeriod": "5_TRADING_DAYS_AFTER_DIVERGENCE",
+        "attributionNote": (
+            "각 시점의 결과를 따로 채점한 값입니다. 이 시점들이 전체 수익률 차이를 "
+            "모두 설명한다는 뜻은 아닙니다."
+        ),
+        "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+    }
+
+
 def _rank_participants(participant_summary: List[dict], simulated_trades: List[dict]) -> List[dict]:
     """Order the run's participants by return, best first."""
     trade_counts: Dict[int, int] = defaultdict(int)
@@ -1994,9 +2099,17 @@ class DeterministicReportAnalyzer:
             principle_set_diagnostics["coverage"],
         )
 
+        divergence_review = _build_divergence_review(
+            analytics,
+            simulated_trades,
+            decision_reviews,
+            outcome["evidence"],
+        )
+
         return {
             "reportVersion": REPORT_IDENTITY,
             "outcome": outcome,
+            "divergenceReview": divergence_review,
             "principleReviewSummary": principle_review_summary,
             "decisionReviews": decision_reviews,
             "keyTradeReviews": key_trade_reviews,
