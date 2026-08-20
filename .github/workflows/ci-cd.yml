@@ -67,6 +67,8 @@ jobs:
       - name: Build image
         run: |
           docker build \
+            --provenance=false \
+            --sbom=false \
             -t ${{ steps.meta.outputs.image }} \
             -t ${{ steps.meta.outputs.image_latest }} \
             .
