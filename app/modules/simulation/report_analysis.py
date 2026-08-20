@@ -793,7 +793,11 @@ def _outcome_branch(ranked: List[dict], review_summary: dict) -> str:
         return "USER_AHEAD_DISCIPLINED"
     if winner == "PERSONAL_BOT":
         return "BOT_AHEAD"
-    return "REFERENCE_AHEAD"
+    if winner == "FAMOUS_STRATEGY":
+        return "REFERENCE_AHEAD"
+    # A winner this function does not recognise must not fall through into a
+    # story about some other participant. Say the comparison is unusable.
+    return "INCONCLUSIVE"
 
 
 OUTCOME_COPY = {

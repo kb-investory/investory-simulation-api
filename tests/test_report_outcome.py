@@ -81,6 +81,20 @@ class OutcomeBranchTests(unittest.TestCase):
 
         self.assertEqual(_outcome_branch(ranked, _summary()), "INCONCLUSIVE")
 
+    def test_an_unknown_winner_does_not_borrow_another_branch_story(self):
+        # A blank or future variantType used to fall through into
+        # REFERENCE_AHEAD, telling the user a comparison strategy won when
+        # nothing of the sort had been established.
+        for unknown in ("", "SOME_NEW_BOT"):
+            with self.subTest(variantType=unknown):
+                ranked = _ranked(ACTUAL_USER=5.0, PERSONAL_BOT=4.0)
+                ranked.insert(0, {
+                    "variantId": 9, "variantType": unknown, "variantName": unknown,
+                    "cumulativeReturnPercent": 30.0, "mddPercent": -1.0,
+                    "tradeCount": 3, "rank": 1,
+                })
+                self.assertEqual(_outcome_branch(ranked, _summary()), "INCONCLUSIVE")
+
     def test_no_participants_at_all_is_inconclusive(self):
         self.assertEqual(_outcome_branch([], _summary()), "INCONCLUSIVE")
 
