@@ -65,13 +65,12 @@ from app.modules.simulation.persistence.db_persistence import (
 from app.api.endpoints.simulation_helpers import (
     RuleCompileRequest, RuleConfirmationRequest, SimulationRunRequest,
     normalize_daily_snapshot, normalize_trade,
-    SIMULATION_RUN_CACHE
+    SIMULATION_RUN_CACHE, TEST_USER_ID,
 )
 
 router = APIRouter(tags=["Simulation & Rules"])
 logger = logging.getLogger(__name__)
 
-TEST_USER_ID = 1
 SUPPORTED_PARTICIPANTS = {
     "ACTUAL_USER": 1,
     "PERSONAL_BOT": 2,
