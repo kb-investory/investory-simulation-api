@@ -63,14 +63,24 @@ SYSTEM_COMPILER_PROMPT = """너는 Investory의 개인 투자봇 전략 생성 �
     "interpreted_principles": [
       {
         "user_natural_text": "원문 문장",
-        "ai_mapped_rule": "매핑된 규칙 항목",
-        "status": "CONFIRMED"
+        "ai_mapped_rules": ["매핑된 규칙 경로"],
+        "stated_rules": ["원문에 기준이 직접 적힌 규칙 경로"],
+        "status": "CONFIRMED",
+        "unmappable_reason": ""
       }
     ],
     "needs_user_confirmation": [
       {
         "field": "확인이 필요한 필드명",
         "reason": "사유 및 추천 기본값 제안"
+      }
+    ],
+    "principle_conflicts": [
+      {
+        "first_principle_text": "원문 문장 A",
+        "second_principle_text": "원문 문장 B",
+        "conflict_type": "CONTRADICTION",
+        "reason": "두 원칙이 어떻게 충돌하는지 설명"
       }
     ]
   }
@@ -81,6 +91,55 @@ SYSTEM_COMPILER_PROMPT = """너는 Investory의 개인 투자봇 전략 생성 �
 2. 수치가 명시되지 않은 파라미터는 6축 투자 성향(위험선호도, 거래주기 등)을 고려해 가장 적합한 기본값을 부여한다.
 3. 팩터 가중치(factor_weights)의 합은 반드시 1.0이 되도록 정규화한다.
 4. 명확하지 않거나 사용자 확인이 필요한 수치는 audit.needs_user_confirmation 배열에 사유와 함께 담는다.
+
+[ai_mapped_rules 형식 - 반드시 지킬 것]
+5. ai_mapped_rules에는 설명 문장을 쓰지 않는다. 아래 목록에 있는 점 표기 경로 문자열만 배열로 담는다.
+   universe.allowed_markets, universe.min_market_cap, universe.min_daily_trading_value,
+   universe.exclude_halted, universe.exclude_administrative,
+   selection.factor_weights, selection.min_passing_score,
+   entry.max_5day_return, entry.moving_average_condition, entry.require_positive_disclosure,
+   additional_buy.allowed, additional_buy.max_additional_count,
+   additional_buy.trigger_drop_rate, additional_buy.additional_weight,
+   portfolio.max_position_count, portfolio.max_single_position_weight, portfolio.max_sector_weight,
+   exit.take_profit_rate, exit.stop_loss_rate, exit.max_holding_days, exit.sell_on_negative_disclosure,
+   rebalance.period, rebalance.min_holding_days_before_rebalance
+   목록에 없는 값을 쓰면 그 원칙은 평가할 수 없게 되므로, 맞는 경로가 없으면 반드시 빈 배열로 둔다.
+   올바른 예: ["entry.max_5day_return"]
+   잘못된 예: ["급등주 추격매수 금지 원칙 적용"], ["entry 영역의 5일 수익률"]
+6. 한 문장이 여러 조건을 담고 있으면 해당하는 경로를 모두 배열에 넣는다.
+   조건 하나만 고르면 나머지 조건은 아무도 검사하지 않는다.
+   예: "급등하지 않았고 거래대금이 충분한 종목만 산다"
+       -> ["entry.max_5day_return", "universe.min_daily_trading_value"]
+   실제로 문장에 담긴 조건만 넣는다. 관련되어 보인다고 추가하지 않는다.
+
+[stated_rules - 사용자가 직접 밝힌 기준]
+7. 사용자가 원문에 기준을 직접 적은 규칙 경로만 stated_rules 에 담는다. ai_mapped_rules 의 부분집합이어야 한다.
+   "손실이 12%에 도달하면 매도한다" -> stated_rules 에 exit.stop_loss_rate 포함 (사용자가 12%를 직접 지정)
+   "물타기는 하지 않는다"            -> stated_rules 에 additional_buy.allowed 포함 (숫자는 없지만 값이 명확)
+   "손실이 커지면 판다"              -> stated_rules 에 넣지 않는다 (기준을 성향으로 추정했으므로)
+   "급등주는 사지 않는다"            -> stated_rules 에 넣지 않는다 (몇 %가 급등인지 사용자가 안 정했으므로)
+8. 판단 기준은 하나다. 그 값을 사용자 문장에서 읽었으면 stated, 성향이나 관례로 채웠으면 넣지 않는다.
+   stated 로 표시한 값은 사용자 확인 없이 위반 판정과 기준 강화에 쓰이므로, 애매하면 넣지 않는다.
+
+[매핑 불가 원칙 처리]
+9. 8대 영역 규칙으로 실행할 수 없는 원칙은 status를 REVIEW_REQUIRED로 두고, ai_mapped_rules는 빈 배열로 남긴다.
+   억지로 비슷한 규칙에 연결하지 않는다. 잘못 연결하면 사용자가 지키지도 않은 기준으로 위반 판정을 받는다.
+10. 그 경우 unmappable_reason에 왜 규칙이 될 수 없는지를 사용자가 읽을 한국어 한 문장으로 적는다.
+   필요한 데이터가 시스템에 없어서인지, 개념 자체가 실행 규칙 밖인지, 문장이 모호해서인지를 구분해 설명한다.
+   예: "실적 발표일 데이터가 아직 시스템에 없어 실행 규칙으로 만들 수 없습니다."
+11. 매핑에 성공한 원칙의 unmappable_reason은 빈 문자열로 둔다.
+
+[원칙 간 충돌 탐지]
+12. 전달받은 원칙 목록 전체를 함께 검토해 서로 충돌하거나 중복되는 쌍을 principle_conflicts에 담는다.
+   같은 규칙 경로에 매핑되지 않아도, 같은 상황에서 반대로 행동하게 만드는 쌍이면 충돌이다.
+   예: "떨어지면 더 산다"와 "10% 빠지면 손절한다"는 서로 다른 영역이지만 같은 국면에서 반대 행동을 지시한다.
+13. conflict_type은 다음 중 하나만 사용한다.
+   CONTRADICTION: 같은 상황에서 서로 반대 행동을 지시함
+   OVERLAP: 사실상 같은 내용을 중복해서 규정함
+   AMBIGUOUS_PRIORITY: 둘 다 적용 가능하나 무엇을 우선할지 정해지지 않음
+14. reason에는 어떤 상황에서 충돌하는지를 구체적으로 적는다. 어느 쪽이 옳은지 판정하거나 원칙을 삭제·수정하도록 제안하지 않는다.
+15. 충돌이 없으면 principle_conflicts는 빈 배열로 둔다. 억지로 만들어내지 않는다.
+16. first_principle_text와 second_principle_text는 반드시 전달받은 원칙 원문을 그대로 사용한다. 새로 쓰거나 요약하지 않는다.
 """
 
 def build_user_compiler_prompt(principles: list, profile: dict, trade_stats: dict) -> str:

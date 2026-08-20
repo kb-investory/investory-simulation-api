@@ -77,8 +77,17 @@ class RebalanceRule:
 class AuditPrincipleItem:
     """8-1. AI 자연어 해석 결과 개별 내역"""
     user_natural_text: str
+    # 대표 규칙 경로. 하위 호환을 위해 유지하며 ai_mapped_rules의 첫 항목과 같습니다.
     ai_mapped_rule: str
     status: str = "CONFIRMED"
+    # 한 원칙이 여러 조건을 담을 수 있으므로 매핑된 경로 전체를 보관합니다.
+    ai_mapped_rules: List[str] = field(default_factory=list)
+    # 사용자가 원문에 기준을 직접 밝힌 규칙 경로. ai_mapped_rules 의 부분집합입니다.
+    # "손실이 12%에 도달하면 손절" 처럼 문장에 값이 있으면 그 값은 AI 추정이 아니라
+    # 사용자가 정한 기준이므로, 확인 없이 평가와 강화에 사용할 수 있습니다.
+    stated_rules: List[str] = field(default_factory=list)
+    # 실행 규칙으로 만들 수 없을 때 그 사유. 매핑에 성공하면 빈 문자열입니다.
+    unmappable_reason: str = ""
 
 @dataclass
 class AuditRule:
@@ -86,6 +95,8 @@ class AuditRule:
     ai_confidence: float = 0.90
     interpreted_principles: List[AuditPrincipleItem] = field(default_factory=list)
     needs_user_confirmation: List[Dict[str, str]] = field(default_factory=list)
+    # 서로 충돌하거나 중복되는 원칙 쌍. 규칙 경로만으로는 찾을 수 없습니다.
+    principle_conflicts: List[Dict[str, str]] = field(default_factory=list)
 
 @dataclass
 class InvestmentBotStrategySchema:
@@ -128,11 +139,18 @@ class InvestmentBotStrategySchema:
         rebalance = RebalanceRule(**{k: v for k, v in reb_data.items() if k in RebalanceRule.__annotations__})
         
         aud_data = data.get("audit", {})
-        inter_principles = [AuditPrincipleItem(**item) for item in aud_data.get("interpretedPrinciples", aud_data.get("interpreted_principles", []))]
+        inter_principles = [
+            AuditPrincipleItem(**{
+                key: value for key, value in item.items()
+                if key in AuditPrincipleItem.__annotations__
+            })
+            for item in aud_data.get("interpretedPrinciples", aud_data.get("interpreted_principles", []))
+        ]
         audit = AuditRule(
             ai_confidence=aud_data.get("aiConfidence", aud_data.get("ai_confidence", 0.90)),
             interpreted_principles=inter_principles,
-            needs_user_confirmation=aud_data.get("needsUserConfirmation", aud_data.get("needs_user_confirmation", []))
+            needs_user_confirmation=aud_data.get("needsUserConfirmation", aud_data.get("needs_user_confirmation", [])),
+            principle_conflicts=aud_data.get("principleConflicts", aud_data.get("principle_conflicts", [])),
         )
         
         schema = cls(
@@ -147,3 +165,35 @@ class InvestmentBotStrategySchema:
         )
         schema.selection.validate()
         return schema
+
+
+def executable_rule_paths() -> List[str]:
+    """Every dotted path a principle may be mapped onto.
+
+    ``audit.ai_mapped_rule`` must be one of these exactly. Anything else cannot
+    be evaluated, so a principle carrying prose here would be marked CONFIRMED
+    and then silently fail every trade check.
+    """
+    schema = InvestmentBotStrategySchema().to_dict()
+    return sorted(
+        f"{section}.{field}"
+        for section, values in schema.items()
+        if section != "audit" and isinstance(values, dict)
+        for field in values
+    )
+
+
+def numeric_rule_paths() -> List[str]:
+    """수치로 표현되는 규칙 경로.
+
+    사용자가 원문에 숫자를 적었는지 검증할 때 씁니다. 참·거짓이나 열거형 규칙은
+    숫자 없이도 문장에서 명시될 수 있으므로("물타기는 하지 않는다") 제외합니다.
+    """
+    schema = InvestmentBotStrategySchema().to_dict()
+    return sorted(
+        f"{section}.{field}"
+        for section, values in schema.items()
+        if section != "audit" and isinstance(values, dict)
+        for field, value in values.items()
+        if isinstance(value, (int, float)) and not isinstance(value, bool)
+    )

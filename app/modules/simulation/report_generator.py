@@ -16,7 +16,7 @@ from datetime import date
 from typing import List, Optional
 
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
-from app.modules.simulation.report_analysis import DeterministicReportAnalyzer
+from app.modules.simulation.report_analysis import REPORT_IDENTITY, DeterministicReportAnalyzer
 from app.modules.simulation.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
 from app.config import settings
 
@@ -25,12 +25,13 @@ logger = logging.getLogger(__name__)
 class SimulationReportGenerator:
     """시뮬레이션 백테스트 및 실제 매매 내역 기반 리포트 생성기"""
 
-    REPORT_VERSION = "DETERMINISTIC_V13"
+    REPORT_VERSION = REPORT_IDENTITY
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or settings.OPENAI_API_KEY
         self.model = model or settings.REPORT_MODEL or "gpt-4o-mini"
-        self.thesis_model = settings.THESIS_VERIFICATION_MODEL or "gpt-5.4-nano"
+        self.search_model = settings.EVIDENCE_SEARCH_MODEL
+        self.judgment_model = settings.EVIDENCE_JUDGMENT_MODEL
 
     def generate_report(
         self,
@@ -223,8 +224,19 @@ class SimulationReportGenerator:
         if not rationale or rationale == "사용자가 입력한 매매 근거 없음":
             return self._unconfirmed_thesis_outcome("NO_RECORDED_RATIONALE", "기록된 매매 근거가 없어 검증할 수 없습니다.")
         checked_until = date.today().isoformat()
-        search_agent = EvidenceSearchAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
-        judgment_agent = EvidenceJudgmentAgent(self.api_key, self.thesis_model, settings.LLM_TIMEOUT)
+        # Retrieval runs on the fast tier; the verdict runs on the reasoning
+        # tier, which needs both the longer wall clock and the token budget.
+        search_agent = EvidenceSearchAgent(
+            self.api_key,
+            self.search_model,
+            settings.LLM_TIMEOUT,
+        )
+        judgment_agent = EvidenceJudgmentAgent(
+            self.api_key,
+            self.judgment_model,
+            settings.REASONING_LLM_TIMEOUT,
+            settings.REASONING_MAX_OUTPUT_TOKENS,
+        )
         dossier = search_agent.search(review, checked_until)
         return judgment_agent.judge(review, dossier, checked_until)
 
@@ -237,10 +249,7 @@ class SimulationReportGenerator:
             "learningInsights": report.get("learningInsights", {}),
             "principleEvaluationSummary": report.get("principleEvaluationSummary", {}),
             "principleEvaluations": report.get("principleEvaluations", []),
-            "recommendedPrinciples": report.get("recommendedPrinciples", []),
-            "principleDiscoveries": report.get("principleDiscoveries", []),
             "principleReinforcements": report.get("principleReinforcements", []),
-            "improvementActions": report.get("improvementActions", []),
         }
         prompt = build_user_report_prompt(narrative_input)
 
@@ -331,19 +340,8 @@ class SimulationReportGenerator:
             for item in narratives.get("recommendationNarratives", [])
             if isinstance(item, dict)
         }
-        for item in report["recommendedPrinciples"]:
+        for item in report.get("principleReinforcements", []):
             text = recommendation_text.get(str(item.get("recommendationId")))
-            if text:
-                item["narrative"] = text
-                merged += 1
-
-        improvement_text = {
-            str(item.get("category")): cls._safe_text(item.get("explanation"))
-            for item in narratives.get("improvementNarratives", [])
-            if isinstance(item, dict)
-        }
-        for item in report["improvementActions"]:
-            text = improvement_text.get(str(item.get("category")))
             if text:
                 item["narrative"] = text
                 merged += 1

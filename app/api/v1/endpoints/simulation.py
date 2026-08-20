@@ -27,6 +27,8 @@ from app.api.error_responses import internal_server_error
 
 from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.counterfactual import build_principle_counterfactuals
+from app.modules.simulation.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.report_generator import SimulationReportGenerator
 from app.modules.simulation.rationale_snapshots import build_rationale_type_snapshots
@@ -61,7 +63,7 @@ from app.modules.simulation.db_persistence import (
 )
 
 from app.api.v1.endpoints.simulation_helpers import (
-    RuleCompileRequest, SimulationRunRequest,
+    RuleCompileRequest, RuleConfirmationRequest, SimulationRunRequest,
     normalize_daily_snapshot, normalize_trade,
     SIMULATION_RUN_CACHE
 )
@@ -90,6 +92,7 @@ ANALYTICS_RESPONSE_FIELDS = (
     "actualPrincipleCompliance",
     "positionSnapshots",
     "principleItems",
+    "ruleConfirmations",
     "securitySnapshots",
     "dailyPerformance",
 )
@@ -100,6 +103,15 @@ REPORT_NARRATIVE_IN_PROGRESS: set[int] = set()
 
 def _analytics_response(data: dict) -> dict:
     return {field: data.get(field) for field in ANALYTICS_RESPONSE_FIELDS}
+
+
+def _nested_rule_value(data: dict, dotted_path: str):
+    current = data
+    for key in str(dotted_path).split("."):
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
 
 
 def _schedule_report_enrichment(
@@ -193,6 +205,10 @@ def _completed_compile_response(
         "compileCacheHit": compile_cache_hit,
         "accountId": resolved_account_id,
         "botDetail": _personal_bot_detail(repository, bot, principle_items, resolved_account_id),
+        # The compiler flags thresholds it had to guess. Returning them here is
+        # what turns audit.needs_user_confirmation from a dead field into a
+        # question the user can actually answer.
+        "ruleConfirmation": _rule_confirmation_view(repository, bot),
     }
     COMPILE_JOB_CACHE[job_id] = response
     return response
@@ -423,6 +439,126 @@ def get_compile_job_status(job_id: str):
 # ==============================================================================
 # 4. 비교 기준 봇 목록 조회 (대응 화면: Huymt)
 # ==============================================================================
+def _rule_confirmation_view(
+    repository: SimulationRepository,
+    bot: Optional[dict] = None,
+) -> dict:
+    """List every threshold the bot runs on, and say who decided each one.
+
+    Never raises: this rides along on the compile response, and a missing
+    confirmation table must not take the compiled bot down with it.
+    """
+    try:
+        confirmations = repository.load_rule_confirmations(TEST_USER_ID)
+    except Exception as error:
+        logger.warning("Rule confirmations unavailable (%s)", type(error).__name__)
+        confirmations = []
+    confirmed_by_rule = {item["targetRule"]: item for item in confirmations}
+    if bot is None:
+        try:
+            bot = repository.load_compiled_personal_bot(TEST_USER_ID)
+        except Exception:
+            bot = None
+    if not bot:
+        return {
+            "confirmations": confirmations,
+            "pendingConfirmations": [],
+            "personalBotId": None,
+        }
+
+    rule_schema = bot.get("ruleSchema") or {}
+    audit = rule_schema.get("audit") or {}
+    pending = []
+    for item in audit.get("interpreted_principles", []) or []:
+        if not isinstance(item, dict):
+            continue
+        target_rule = str(item.get("ai_mapped_rule") or item.get("mappedRule") or "")
+        if not target_rule or target_rule in confirmed_by_rule:
+            continue
+        pending.append({
+            "targetRule": target_rule,
+            "principleText": str(item.get("user_natural_text") or item.get("userNaturalText") or ""),
+            "suggestedValue": _nested_rule_value(rule_schema, target_rule),
+            "valueSource": "AI_INFERRED",
+            "reason": next(
+                (
+                    str(row.get("reason") or "")
+                    for row in audit.get("needs_user_confirmation", []) or []
+                    if isinstance(row, dict) and str(row.get("field") or "") in target_rule
+                ),
+                "원칙 문구에 수치가 없어 AI가 기준값을 추정했습니다.",
+            ),
+        })
+    return {
+        "confirmations": confirmations,
+        "pendingConfirmations": pending,
+        "personalBotId": bot.get("personalBotId"),
+        "aiConfidence": audit.get("ai_confidence"),
+    }
+
+
+@router.get("/simulation-bots/rule-confirmations", summary="4-1. 실행 기준 확정 상태 조회")
+def get_rule_confirmations():
+    """
+    [대응 화면: 원칙 봇 기준 확인]
+    - 사용자가 확정한 실행 기준과, AI가 추정해 확인이 필요한 기준을 함께 반환합니다.
+    """
+    repository = SimulationRepository()
+    try:
+        return _rule_confirmation_view(repository)
+    except Exception as error:
+        raise internal_server_error(
+            logger,
+            error,
+            code="RULE_CONFIRMATIONS_READ_INTERNAL_ERROR",
+            message="실행 기준 확정 상태를 조회하는 중 서버 오류가 발생했습니다.",
+        ) from error
+
+
+@router.post("/simulation-bots/rule-confirmations", summary="4-2. 실행 기준 확정")
+def save_rule_confirmations(req: RuleConfirmationRequest):
+    """
+    [대응 화면: 원칙 봇 기준 확인]
+    - AI가 추정한 기준값을 사용자가 확정합니다. 이후 원칙 평가는 확정값을 우선 적용합니다.
+    """
+    repository = SimulationRepository()
+    try:
+        unknown = sorted(
+            {item.targetRule for item in req.confirmations} - set(RULE_STRENGTHEN_SPEC)
+        )
+        if unknown:
+            raise SimulationDataError(
+                "UNKNOWN_TARGET_RULE",
+                "실행 규칙으로 존재하지 않는 경로가 포함되어 있습니다.",
+                {"targetRules": unknown},
+            )
+        stored = repository.save_rule_confirmations(
+            TEST_USER_ID,
+            [item.model_dump() for item in req.confirmations],
+        )
+        return {
+            "status": "SUCCESS",
+            "confirmedCount": len(req.confirmations),
+            "confirmations": stored,
+            # A confirmed threshold changes what the bot executes, so the bot has
+            # to be rebuilt before the next run reflects it.
+            "recompileRequired": True,
+            "message": "실행 기준을 확정했습니다. 투자봇을 다시 생성한 뒤 시뮬레이션을 실행해 주세요.",
+        }
+    except SimulationDataError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": error.code, "message": error.message, "details": error.details},
+        )
+    except Exception as error:
+        raise internal_server_error(
+            logger,
+            error,
+            code="RULE_CONFIRMATIONS_WRITE_INTERNAL_ERROR",
+            message="실행 기준을 확정하는 중 서버 오류가 발생했습니다.",
+        ) from error
+
+
 @router.get("/simulation-bots/comparators", summary="4. 대조 비교 참가자 봇 4종 목록 조회")
 def get_comparator_bots(
     personalBotId: Optional[str] = None,
@@ -530,6 +666,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
         market_index_prices = repository.load_market_index_prices(req.period_start, req.period_end)
         user_trades = repository.load_actual_trades(account_id, req.period_start, req.period_end)
         principles_data = repository.load_principles(TEST_USER_ID) if compiled_bot else []
+        rule_confirmations = repository.load_rule_confirmations(TEST_USER_ID) if compiled_bot else []
         disclosure_events = repository.load_disclosures(req.period_start, req.period_end)
         data_quality = repository.assess_trade_price_quality(account_id, req.period_start, req.period_end)
         data_load_ms = (perf_counter() - request_started) * 1000
@@ -699,6 +836,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             # Keep the evaluated principle identities in analytics_json so a
             # report can be rebuilt without reading today's mutable principle set.
             "principleItems": principles_data,
+            "ruleConfirmations": rule_confirmations,
             "securitySnapshots": securities,
         }
 
@@ -738,6 +876,38 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             analytics=report_analytics,
         )
         report_generation_ms = (perf_counter() - report_generation_started) * 1000
+
+        # Replay the user's own trades once per violated principle so the report
+        # can attribute the gap to a single principle instead of the whole bot.
+        counterfactual_started = perf_counter()
+        actual_summary = next(
+            (item for item in participant_summary if item["variantType"] == "ACTUAL_USER"),
+            {},
+        )
+        try:
+            build_principle_counterfactuals(
+                deterministic_report,
+                period_start=req.period_start,
+                period_end=req.period_end,
+                initial_capital=initial_capital,
+                securities_map=securities_map,
+                daily_prices=daily_prices,
+                trading_days=trading_days,
+                actual_trades=user_trades,
+                simulated_trades=normalized_trades,
+                initial_positions=initial_positions,
+                disclosures_by_date=disclosures_by_date,
+                baseline_return_percent=actual_summary.get("cumulativeReturnPercent"),
+                baseline_mdd_percent=actual_summary.get("mddPercent"),
+            )
+        except Exception as error:
+            logger.warning(
+                "Principle counterfactuals skipped for simulation %s",
+                db_run_id,
+                exc_info=error,
+            )
+        counterfactual_ms = (perf_counter() - counterfactual_started) * 1000
+
         background_tasks.add_task(
             save_simulation_report_to_db,
             db_run_id,
@@ -804,6 +974,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
                 "monteCarlo500Runs": round(monte_carlo_ms, 1),
                 "analytics": round(analytics_ms, 1),
                 "reportGeneration": round(report_generation_ms, 1),
+                "principleCounterfactuals": round(counterfactual_ms, 1),
                 "persistenceReservation": round(persistence_reservation_ms, 1),
                 "responseReady": round((perf_counter() - request_started) * 1000, 1),
                 "cacheHit": False,

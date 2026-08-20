@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 
 from app.modules.simulation.evaluator import StockEvaluator
 from app.modules.simulation.rule_schema import SelectionRule
+from app.modules.simulation.strengthen_spec import build_strengthen_proposal
 from app.modules.simulation.strategy_catalog import (
     VALUE_QUALITY_REFERENCE_PRINCIPLES,
     VALUE_QUALITY_STRATEGY,
@@ -15,6 +16,30 @@ from app.modules.simulation.strategy_catalog import (
 
 
 ACTUAL_VARIANT_IDS = {1, 1001}
+
+# 리포트 형태의 식별자. 버전 사다리가 아니라 "이 형태인지"만 구분합니다.
+REPORT_IDENTITY = "DETERMINISTIC"
+
+# A principle needs this many assessed trades before "no problem found" is an
+# honest conclusion. Below it the verdict says the evidence is still thin
+# instead of clearing the principle.
+RELIABLE_SAMPLE_MINIMUM = 5
+# Post-trade return averages are hidden below this many samples.
+OUTCOME_SAMPLE_MINIMUM = 3
+STRENGTHEN_VIOLATION_RATE = 40.0
+
+BUY_RULE_SECTIONS = ("universe", "selection", "entry", "portfolio", "additional_buy")
+SELL_RULE_SECTIONS = ("exit", "rebalance")
+SECTION_LABELS = {
+    "universe": "투자 대상 종목군",
+    "selection": "종목 평가",
+    "entry": "신규 매수 진입",
+    "additional_buy": "추가 매수",
+    "portfolio": "비중·위험 관리",
+    "exit": "매도·익절·손절",
+    "rebalance": "리밸런싱",
+}
+
 DEFAULT_RATIONALE_MARKERS = (
     "과거 실제 매매 내역 재현",
     "database actual fill",
@@ -287,21 +312,9 @@ def _principle_feedback(judgment: str, principle: Optional[dict], bot_action: st
         return f"'{title}' 원칙에 맞게 행동했어요. 정한 원칙을 제대로 지켰습니다."
     if judgment == "VIOLATED":
         return f"'{title}' 원칙대로라면 이 시점에는 {bot_action} 판단을 먼저 따랐어야 해요."
-    if judgment == "DECISION_DIFFERENCE":
-        return "명시적인 사용자 원칙 위반은 확인되지 않았지만 개인 원칙봇과 다른 판단을 했어요."
     if judgment == "INSUFFICIENT_DATA":
         return "원칙 준수 여부를 판단할 데이터가 부족합니다."
     return "이 거래에 직접 연결할 수 있는 명시적인 사용자 원칙이 없습니다."
-
-
-def _fallback_proposed_value(config: dict, current_value):
-    proposed = float(config["proposedValue"])
-    if not isinstance(current_value, (int, float)):
-        return proposed
-    current = float(current_value)
-    if config["strengthDirection"] == "DECREASE":
-        return min(current, proposed)
-    return max(current, proposed)
 
 
 def _rule_paths(rule_json: dict, prefix: str = "") -> List[str]:
@@ -315,11 +328,77 @@ def _rule_paths(rule_json: dict, prefix: str = "") -> List[str]:
     return paths
 
 
+def _mapped_rule_paths(matched: Optional[dict], item_paths: List[str]) -> List[str]:
+    """Every rule path one principle maps onto, in the compiler's order.
+
+    A single sentence often carries several conditions, and forcing it onto one
+    rule left the rest of the sentence unenforced.
+    """
+    matched = matched or {}
+    paths = matched.get("ai_mapped_rules") or matched.get("mappedRules") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    ordered = [str(path).strip() for path in paths if str(path).strip()]
+    primary = str(matched.get("ai_mapped_rule") or matched.get("mappedRule") or "").strip()
+    if primary and primary not in ordered:
+        ordered.insert(0, primary)
+    if not ordered and len(item_paths) == 1:
+        ordered = [item_paths[0]]
+    seen = set()
+    return [path for path in ordered if not (path in seen or seen.add(path))]
+
+
+def _stated_rule_paths(matched: Optional[dict]) -> set:
+    """규칙 중 사용자가 원문에 기준을 직접 밝힌 것들."""
+    paths = (matched or {}).get("stated_rules") or (matched or {}).get("statedRules") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    return {str(path).strip() for path in paths if str(path).strip()}
+
+
+def _resolve_current_value(
+    target_rule: str,
+    item_rule: dict,
+    rule_schema: dict,
+    confirmations: dict,
+    stated_rules: Optional[set] = None,
+) -> tuple[object, str]:
+    """Find the threshold to judge against, and say where it came from.
+
+    A number the compiler invented is not the user's standard. Judging a trade
+    against it and calling the result a violation grades the user on a bar they
+    never set, so the source travels with the value and gates what may be done
+    with it.
+    """
+    if not target_rule:
+        return None, "NOT_APPLICABLE"
+    if target_rule in confirmations:
+        return confirmations[target_rule], "USER_CONFIRMED"
+    from_principle = _nested_value(item_rule, target_rule) if isinstance(item_rule, dict) else None
+    if from_principle is not None:
+        return from_principle, "PRINCIPLE_RULE_JSON"
+    from_schema = _nested_value(rule_schema, target_rule)
+    if from_schema is not None:
+        # The compiler read this number out of the user's own sentence. Parsing
+        # what someone wrote is not the same as inventing it, so it does not
+        # need to be confirmed back to them.
+        if stated_rules and target_rule in stated_rules:
+            return from_schema, "USER_STATED"
+        return from_schema, "AI_INFERRED"
+    return None, "MISSING"
+
+
 def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
     """Return every active principle, including ones with no applicable trades."""
     audit = rule_schema.get("audit") if isinstance(rule_schema, dict) else {}
     interpreted = audit.get("interpreted_principles", []) if isinstance(audit, dict) else []
     principle_items = analytics.get("principleItems") or []
+    confirmations = {
+        str(item.get("targetRule") or item.get("target_rule") or ""): item.get("confirmedValue")
+        if "confirmedValue" in item else item.get("confirmed_value")
+        for item in (analytics.get("ruleConfirmations") or [])
+        if isinstance(item, dict) and (item.get("targetRule") or item.get("target_rule"))
+    }
     catalog = []
 
     if principle_items:
@@ -344,17 +423,27 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
                     ),
                     None,
                 )
-            target_rule = str(
-                (matched or {}).get("ai_mapped_rule")
-                or (matched or {}).get("mappedRule")
-                or (item_paths[0] if len(item_paths) == 1 else "")
+            target_rules = _mapped_rule_paths(matched, item_paths)
+            target_rule = target_rules[0] if target_rules else ""
+            stated = _stated_rule_paths(matched)
+            current_value, value_source = _resolve_current_value(
+                target_rule, item_rule, rule_schema, confirmations, stated
             )
+            rules = []
+            for path in target_rules:
+                value, source = _resolve_current_value(
+                    path, item_rule, rule_schema, confirmations, stated
+                )
+                rules.append({"targetRule": path, "currentValue": value, "valueSource": source})
             catalog.append({
                 "principleSetItemId": item.get("principleSetItemId") or item.get("principle_set_item_id"),
                 "principleText": text,
                 "targetRule": target_rule or None,
+                "targetRules": target_rules,
+                "rules": rules,
                 "status": str((matched or {}).get("status") or ("CONFIRMED" if target_rule else "REVIEW_REQUIRED")),
-                "currentValue": _nested_value(rule_schema, target_rule) if target_rule else None,
+                "currentValue": current_value,
+                "valueSource": value_source,
                 "currentRuleJson": item_rule if isinstance(item_rule, dict) else {},
                 "sortOrder": item.get("sortOrder") or item.get("sort_order") or index,
             })
@@ -363,14 +452,25 @@ def _principle_catalog(analytics: dict, rule_schema: dict) -> List[dict]:
     for index, item in enumerate(interpreted, 1):
         if not isinstance(item, dict):
             continue
-        target_rule = str(item.get("ai_mapped_rule") or item.get("mappedRule") or "")
-        current_value = _nested_value(rule_schema, target_rule) if target_rule else None
+        target_rules = _mapped_rule_paths(item, [])
+        target_rule = target_rules[0] if target_rules else ""
+        stated = _stated_rule_paths(item)
+        current_value, value_source = _resolve_current_value(
+            target_rule, {}, rule_schema, confirmations, stated
+        )
+        rules = []
+        for path in target_rules:
+            value, source = _resolve_current_value(path, {}, rule_schema, confirmations, stated)
+            rules.append({"targetRule": path, "currentValue": value, "valueSource": source})
         catalog.append({
             "principleSetItemId": item.get("principle_set_item_id") or item.get("principleSetItemId"),
             "principleText": str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip(),
             "targetRule": target_rule or None,
+            "targetRules": target_rules,
+            "rules": rules,
             "status": str(item.get("status") or "CONFIRMED"),
             "currentValue": current_value,
+            "valueSource": value_source,
             "currentRuleJson": _rule_json(target_rule, current_value) if target_rule and current_value is not None else {},
             "sortOrder": index,
         })
@@ -385,8 +485,30 @@ def _directional_return(review: dict, period: str) -> Optional[float]:
     return round(-numeric if review.get("action") in {"SELL", "REDUCE"} else numeric, 2)
 
 
-def _average(values: List[float]) -> Optional[float]:
-    return round(sum(values) / len(values), 2) if values else None
+def _average(values: List[float], minimum_count: int = 1) -> Optional[float]:
+    """Average only when the sample is large enough to be worth showing."""
+    if len(values) < max(1, minimum_count):
+        return None
+    return round(sum(values) / len(values), 2)
+
+
+def _wilson_lower_bound(successes: int, total: int, z: float = 1.96) -> Optional[float]:
+    """Return the 95% lower bound of a rate so small samples cannot look certain."""
+    if total <= 0:
+        return None
+    observed = successes / total
+    denominator = 1 + z ** 2 / total
+    centre = observed + z ** 2 / (2 * total)
+    margin = z * ((observed * (1 - observed) / total + z ** 2 / (4 * total ** 2)) ** 0.5)
+    return round(max(0.0, (centre - margin) / denominator) * 100, 1)
+
+
+def _evidence_strength(applicable_count: int, violation_lower_bound: Optional[float]) -> str:
+    if applicable_count >= RELIABLE_SAMPLE_MINIMUM * 2 and (violation_lower_bound or 0) >= STRENGTHEN_VIOLATION_RATE:
+        return "STRONG"
+    if applicable_count >= RELIABLE_SAMPLE_MINIMUM:
+        return "MODERATE"
+    return "PRELIMINARY"
 
 
 def _build_principle_evaluations(
@@ -396,7 +518,6 @@ def _build_principle_evaluations(
 ) -> tuple[List[dict], List[dict]]:
     evaluations = []
     reinforcements = []
-    configs_by_rule = {item["targetRule"]: item for item in PATTERN_CONFIG.values()}
     catalog = _principle_catalog(analytics, rule_schema)
 
     for index, principle in enumerate(catalog, 1):
@@ -421,13 +542,55 @@ def _build_principle_evaluations(
 
         followed = [review for review, match in related if match.get("judgment") == "FOLLOWED"]
         violated = [review for review, match in related if match.get("judgment") == "VIOLATED"]
+        value_source = str(principle.get("valueSource") or "MISSING")
+        # With several rules behind one principle, tighten the one that actually
+        # broke rather than whichever happened to be listed first.
+        violation_counts: Dict[str, int] = defaultdict(int)
+        for _, match in related:
+            for rule_result in match.get("ruleResults") or []:
+                if rule_result.get("judgment") == "VIOLATED" and rule_result.get("targetRule"):
+                    violation_counts[str(rule_result["targetRule"])] += 1
+        suggestion_rule = (
+            max(violation_counts.items(), key=lambda item: (item[1], item[0]))[0]
+            if violation_counts
+            else target_rule
+        )
+        suggestion_value = next(
+            (
+                rule.get("currentValue")
+                for rule in principle.get("rules") or []
+                if rule.get("targetRule") == suggestion_rule
+            ),
+            principle.get("currentValue"),
+        )
+        suggestion_value_source = next(
+            (
+                str(rule.get("valueSource") or "MISSING")
+                for rule in principle.get("rules") or []
+                if rule.get("targetRule") == suggestion_rule
+            ),
+            value_source,
+        )
+        # The measured value on each followed trade is the band the user proved
+        # they can stay inside. A proposal derived from it beats a constant.
+        followed_actual_values = [
+            rule_result["evidence"]["actualValue"]
+            for _, match in related
+            for rule_result in (match.get("ruleResults") or [])
+            if rule_result.get("targetRule") == suggestion_rule
+            and rule_result.get("judgment") == "FOLLOWED"
+            and isinstance(rule_result.get("evidence"), dict)
+            and isinstance(rule_result["evidence"].get("actualValue"), (int, float))
+            and not isinstance(rule_result["evidence"].get("actualValue"), bool)
+        ]
         applicable_count = len(followed) + len(violated)
         violation_rate = round(len(violated) / applicable_count * 100, 1) if applicable_count else None
         followed_5d = [value for item in followed if (value := _directional_return(item, "return5dPercent")) is not None]
         followed_20d = [value for item in followed if (value := _directional_return(item, "return20dPercent")) is not None]
         violated_5d = [value for item in violated if (value := _directional_return(item, "return5dPercent")) is not None]
         violated_20d = [value for item in violated if (value := _directional_return(item, "return20dPercent")) is not None]
-        config = configs_by_rule.get(target_rule)
+        violation_lower_bound = _wilson_lower_bound(len(violated), applicable_count)
+        evidence_strength = _evidence_strength(applicable_count, violation_lower_bound)
         status = str(principle.get("status") or "REVIEW_REQUIRED")
 
         if status != "CONFIRMED" or not target_rule:
@@ -436,58 +599,102 @@ def _build_principle_evaluations(
         elif applicable_count < 2:
             verdict = "INSUFFICIENT_DATA"
             reason = f"평가 가능한 거래가 {applicable_count}건이라 원칙을 변경하기에는 데이터가 부족합니다."
-        elif len(violated) >= 2 and (violation_rate or 0) >= 40:
-            verdict = "STRENGTHEN"
-            reason = f"적용 거래 {applicable_count}건 중 {len(violated)}건에서 원칙을 지키지 않아 실행 기준 강화가 필요합니다."
+        elif len(violated) >= 2 and (violation_rate or 0) >= STRENGTHEN_VIOLATION_RATE:
+            if suggestion_value_source == "AI_INFERRED":
+                # The repeated violation is real, but it was measured against a
+                # number the compiler invented because the sentence had none.
+                # Ask the user what the bar is before proposing to tighten it.
+                verdict = "CONFIRM_THRESHOLD"
+                reason = (
+                    f"적용 거래 {applicable_count}건 중 {len(violated)}건이 기준을 벗어났습니다. "
+                    "다만 이 기준값은 원칙 문구에 수치가 없어 AI가 추정한 값입니다. "
+                    "기준을 확정해 주시면 다음 회차부터 강화안을 제안합니다."
+                )
+            else:
+                verdict = "STRENGTHEN"
+                reason = f"적용 거래 {applicable_count}건 중 {len(violated)}건에서 원칙을 지키지 않아 실행 기준 강화가 필요합니다."
         elif (
-            len(followed_5d) >= 3
-            and len(followed_20d) >= 3
+            len(followed_5d) >= OUTCOME_SAMPLE_MINIMUM
+            and len(followed_20d) >= OUTCOME_SAMPLE_MINIMUM
             and (_average(followed_5d) or 0) < 0
             and (_average(followed_20d) or 0) < 0
         ):
             verdict = "REVISE"
             reason = "원칙을 지킨 거래에서도 불리한 5거래일·20거래일 결과가 반복되어 기준을 다시 검토할 필요가 있습니다."
+        elif applicable_count < RELIABLE_SAMPLE_MINIMUM:
+            # Never clear a principle on two or three trades. Say the evidence is
+            # still thin so the next simulation has a reason to exist.
+            verdict = "EARLY_SIGNAL"
+            shortfall = RELIABLE_SAMPLE_MINIMUM - applicable_count
+            observed = (
+                f"{len(violated)}건에서 원칙을 지키지 않았습니다"
+                if violated
+                else "아직 위반이 확인되지 않았습니다"
+            )
+            reason = (
+                f"적용 거래 {applicable_count}건 중 {observed}. "
+                f"판단을 확정하기에는 표본이 적어 {shortfall}건이 더 쌓이면 평가합니다."
+            )
         else:
             verdict = "KEEP"
             reason = f"평가 가능한 거래 {applicable_count}건에서 현재 원칙을 변경할 만큼 반복적인 문제가 확인되지 않았습니다."
 
-        suggestion = None
-        if verdict == "STRENGTHEN" and config:
-            proposed_value = _fallback_proposed_value(config, principle.get("currentValue"))
-            suggestion = {
-                "recommendationId": 4000 + index,
-                "opportunityId": f"PRINCIPLE:{principle_id or index}:{target_rule}",
-                "proposalType": "REINFORCEMENT",
-                "principleSetItemId": principle_id,
-                "principleType": config["principleType"],
-                "title": config["title"],
-                "description": config["description"],
-                "sourcePrincipleText": principle_text,
-                "targetRule": target_rule,
-                "currentValue": principle.get("currentValue"),
-                "proposedValue": proposed_value,
-                "allowedMinimum": config["allowedMinimum"],
-                "allowedMaximum": config["allowedMaximum"],
-                "strengthDirection": config["strengthDirection"],
-                "changeType": "THRESHOLD_ADJUSTMENT" if principle.get("currentValue") != proposed_value else "ENFORCEMENT_REINFORCEMENT",
-                "ruleJson": _rule_json(target_rule, proposed_value),
-                "evidence": {
-                    "applicableCount": applicable_count,
-                    "followedCount": len(followed),
-                    "violatedCount": len(violated),
-                    "tradeIds": [item.get("tradeId") for item in violated[:10]],
-                },
-                "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
-                "proposalSource": "DETERMINISTIC_FALLBACK",
-            }
-            reinforcements.append(suggestion)
-
         evaluation_id = f"PE_{principle_id or index}_{str(target_rule or 'REVIEW').replace('.', '_')}"
+        suggestion = None
+        if verdict == "STRENGTHEN":
+            proposal = build_strengthen_proposal(
+                suggestion_rule,
+                suggestion_value,
+                followed_actual_values,
+            )
+            if proposal:
+                proposed_value = proposal["proposedValue"]
+                # A rule whose value cannot move still gets a proposal, but it
+                # must not claim to change the rule JSON.
+                rule_json = (
+                    {}
+                    if proposal["changeType"] == "ENFORCEMENT_REINFORCEMENT"
+                    else _rule_json(suggestion_rule, proposed_value)
+                )
+                suggestion = {
+                    "recommendationId": 4000 + index,
+                    "evaluationId": evaluation_id,
+                    "opportunityId": f"PRINCIPLE:{principle_id or index}:{suggestion_rule}",
+                    "proposalType": "REINFORCEMENT",
+                    "principleSetItemId": principle_id,
+                    "principleType": proposal["principleType"],
+                    "title": proposal["title"],
+                    "description": proposal["description"],
+                    "sourcePrincipleText": principle_text,
+                    "targetRule": suggestion_rule,
+                    "currentValue": proposal["currentValue"],
+                    "proposedValue": proposed_value,
+                    "allowedMinimum": proposal["allowedMinimum"],
+                    "allowedMaximum": proposal["allowedMaximum"],
+                    "strengthDirection": proposal["strengthDirection"],
+                    "changeType": proposal["changeType"],
+                    "valueBasis": proposal["valueBasis"],
+                    "ruleJson": rule_json,
+                    "evidence": {
+                        "applicableCount": applicable_count,
+                        "followedCount": len(followed),
+                        "violatedCount": len(violated),
+                        "followedValueSampleCount": len(followed_actual_values),
+                        "tradeIds": [item.get("tradeId") for item in violated[:10]],
+                    },
+                    "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+                    "proposalSource": "DETERMINISTIC_FALLBACK",
+                }
+                reinforcements.append(suggestion)
+
         evaluations.append({
             "evaluationId": evaluation_id,
             "principleSetItemId": principle_id,
             "principleText": principle_text,
             "targetRule": target_rule,
+            "targetRules": principle.get("targetRules") or ([target_rule] if target_rule else []),
+            "currentValue": principle.get("currentValue"),
+            "valueSource": value_source,
             "verdict": verdict,
             "evaluationReason": reason,
             "statistics": {
@@ -495,6 +702,10 @@ def _build_principle_evaluations(
                 "followedCount": len(followed),
                 "violatedCount": len(violated),
                 "violationRatePercent": violation_rate,
+                "violationRateLowerBoundPercent": violation_lower_bound,
+                "reliableSampleMinimum": RELIABLE_SAMPLE_MINIMUM,
+                "sampleShortfall": max(0, RELIABLE_SAMPLE_MINIMUM - applicable_count),
+                "evidenceStrength": evidence_strength,
                 "unassessedCount": sum(
                     match.get("judgment") in {"NOT_APPLICABLE", "INSUFFICIENT_DATA"}
                     for _, match in related
@@ -502,10 +713,17 @@ def _build_principle_evaluations(
             },
             "outcomes": {
                 "calculationBasis": "DIRECTION_ADJUSTED_POST_TRADE_RETURN",
-                "followed5dAveragePercent": _average(followed_5d),
-                "followed20dAveragePercent": _average(followed_20d),
-                "violated5dAveragePercent": _average(violated_5d),
-                "violated20dAveragePercent": _average(violated_20d),
+                "minimumSampleCount": OUTCOME_SAMPLE_MINIMUM,
+                "followed5dAveragePercent": _average(followed_5d, OUTCOME_SAMPLE_MINIMUM),
+                "followed20dAveragePercent": _average(followed_20d, OUTCOME_SAMPLE_MINIMUM),
+                "violated5dAveragePercent": _average(violated_5d, OUTCOME_SAMPLE_MINIMUM),
+                "violated20dAveragePercent": _average(violated_20d, OUTCOME_SAMPLE_MINIMUM),
+                "sampleCounts": {
+                    "followed5d": len(followed_5d),
+                    "followed20d": len(followed_20d),
+                    "violated5d": len(violated_5d),
+                    "violated20d": len(violated_20d),
+                },
             },
             "evidenceTradeIds": [
                 review.get("tradeId")
@@ -513,10 +731,473 @@ def _build_principle_evaluations(
                 if match.get("judgment") in {"FOLLOWED", "VIOLATED"}
             ][:20],
             "suggestion": suggestion,
+            # Replaced by a real replay when the run has the price data loaded.
+            # Kept here so rebuilt reports keep the same shape.
+            "counterfactual": {
+                "supported": False,
+                "reasonCode": "NOT_COMPUTED",
+                "reason": "이 리포트에서는 대안 시나리오를 계산하지 않았습니다.",
+                "method": None,
+            },
             "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
         })
 
     return evaluations, reinforcements
+
+
+PERSONAL_BOT_VARIANT_ID = 2
+# 매수는 오른 만큼, 매도는 내린 만큼이 잘한 것입니다. 관망은 0점입니다.
+ACTION_DIRECTION = {"BUY": 1.0, "ADD": 1.0, "SELL": -1.0, "REDUCE": -1.0, "HOLD": 0.0}
+
+
+def _action_score(actions: List[str], return_percent: Optional[float]) -> Optional[float]:
+    """Score one side's action by the move that followed it."""
+    if return_percent is None:
+        return None
+    direction = next(
+        (ACTION_DIRECTION[action] for action in actions if action in ACTION_DIRECTION),
+        0.0,
+    )
+    return round(direction * float(return_percent), 2)
+
+
+def _build_divergence_review(
+    analytics: dict,
+    simulated_trades: List[dict],
+    decision_reviews: List[dict],
+    outcome_evidence: dict,
+) -> dict:
+    """Where the user and their own principle bot acted differently, and how each fared.
+
+    This does not claim the moments below add up to the performance gap: they are
+    the points where the two split, scored one at a time. Attributing the whole
+    difference to them would be arithmetic the data does not support.
+    """
+    securities = {
+        int(item.get("securityId") or item.get("security_id") or 0): item
+        for item in analytics.get("securitySnapshots") or []
+    }
+    bot_reason_by_key: Dict[tuple, str] = {}
+    for trade in simulated_trades:
+        if _variant_id(trade) != PERSONAL_BOT_VARIANT_ID:
+            continue
+        key = (_trade_date(trade), int(trade.get("securityId") or trade.get("security_id") or 0))
+        reason = str(trade.get("decisionReason") or trade.get("rationaleText") or "").strip()
+        if reason:
+            bot_reason_by_key.setdefault(key, reason)
+
+    violations_by_key: Dict[tuple, List[dict]] = defaultdict(list)
+    for review in decision_reviews:
+        key = (str(review.get("tradedAt") or "")[:10], int(review.get("securityId") or 0))
+        for match in review.get("principleMatches", []):
+            if match.get("judgment") == "VIOLATED":
+                violations_by_key[key].append({
+                    "principleSetItemId": match.get("principleSetItemId"),
+                    "principleText": match.get("principleText"),
+                    "targetRule": match.get("targetRule"),
+                    "reason": match.get("reason"),
+                })
+
+    moments = []
+    for moment in analytics.get("divergenceMoments") or []:
+        date = str(moment.get("date") or "")[:10]
+        security_id = int(moment.get("securityId") or 0)
+        key = (date, security_id)
+        user_actions = list(moment.get("actualUserActions") or ["HOLD"])
+        bot_actions = list(moment.get("personalBotActions") or ["HOLD"])
+        return_percent = moment.get("subsequent5TradingDayReturnPercent")
+        user_score = _action_score(user_actions, return_percent)
+        bot_score = _action_score(bot_actions, return_percent)
+        if user_score is None or bot_score is None:
+            better = "UNKNOWN"
+        elif user_score > bot_score:
+            better = "ACTUAL_USER"
+        elif bot_score > user_score:
+            better = "PERSONAL_BOT"
+        else:
+            better = "TIED"
+        moments.append({
+            "date": date,
+            "securityId": security_id,
+            "securityName": securities.get(security_id, {}).get("securityName") or f"종목 {security_id}",
+            "userActions": user_actions,
+            "botActions": bot_actions,
+            "botReason": bot_reason_by_key.get(key),
+            "return5dPercent": return_percent,
+            "userScore": user_score,
+            "botScore": bot_score,
+            "betterSide": better,
+            "violatedPrinciples": violations_by_key.get(key, []),
+        })
+
+    counts = defaultdict(int)
+    for item in moments:
+        counts[item["betterSide"]] += 1
+    return {
+        "gapPercentPoint": outcome_evidence.get("principleBotGapPercentPoint"),
+        "momentCount": len(moments),
+        "botBetterCount": counts["PERSONAL_BOT"],
+        "userBetterCount": counts["ACTUAL_USER"],
+        "tiedCount": counts["TIED"],
+        "undeterminedCount": counts["UNKNOWN"],
+        "moments": moments,
+        "measurementPeriod": "5_TRADING_DAYS_AFTER_DIVERGENCE",
+        "attributionNote": (
+            "각 시점의 결과를 따로 채점한 값입니다. 이 시점들이 전체 수익률 차이를 "
+            "모두 설명한다는 뜻은 아닙니다."
+        ),
+        "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+    }
+
+
+def _rank_participants(participant_summary: List[dict], simulated_trades: List[dict]) -> List[dict]:
+    """Order the run's participants by return, best first."""
+    trade_counts: Dict[int, int] = defaultdict(int)
+    for trade in simulated_trades:
+        trade_counts[_variant_id(trade)] += 1
+    ranked = sorted(
+        (
+            {
+                "variantId": int(item.get("variantId") or 0),
+                "variantType": str(item.get("variantType") or ""),
+                "variantName": item.get("variantName"),
+                "cumulativeReturnPercent": round(float(item.get("cumulativeReturnPercent") or 0.0), 2),
+                "mddPercent": round(float(item.get("mddPercent") or 0.0), 2),
+                "tradeCount": trade_counts.get(int(item.get("variantId") or 0), 0),
+            }
+            for item in participant_summary
+        ),
+        key=lambda item: item["cumulativeReturnPercent"],
+        reverse=True,
+    )
+    for position, item in enumerate(ranked, 1):
+        item["rank"] = position
+    return ranked
+
+
+def _outcome_branch(ranked: List[dict], review_summary: dict) -> str:
+    """Pick the one story this run has to tell.
+
+    Rank alone decides which participant the report talks about, but it never
+    decides whether the user is praised: a first place reached while breaking
+    the user's own rules is luck, and saying otherwise would undo the whole
+    point of judging process separately from outcome.
+    """
+    by_type = {item["variantType"]: item for item in ranked}
+    personal = by_type.get("PERSONAL_BOT")
+    if not ranked or (personal is not None and personal["tradeCount"] == 0):
+        # A bot that never traded has a 0% line, not a comparable result.
+        return "INCONCLUSIVE"
+
+    winner = ranked[0]["variantType"]
+    if winner == "RANDOM_BOT":
+        return "MARKET_LUCK"
+    if winner == "ACTUAL_USER":
+        if review_summary.get("violatedCount", 0) >= 2:
+            return "USER_AHEAD_LUCKY"
+        return "USER_AHEAD_DISCIPLINED"
+    if winner == "PERSONAL_BOT":
+        return "BOT_AHEAD"
+    if winner == "FAMOUS_STRATEGY":
+        return "REFERENCE_AHEAD"
+    # A winner this function does not recognise must not fall through into a
+    # story about some other participant. Say the comparison is unusable.
+    return "INCONCLUSIVE"
+
+
+OUTCOME_COPY = {
+    "INCONCLUSIVE": (
+        "이번 회차는 비교할 수 없습니다",
+        "원칙봇이 한 건도 매매하지 않아 순위를 견줄 수 없습니다. 원칙과 종목 데이터를 확인해 주세요.",
+        "COVERAGE",
+    ),
+    "MARKET_LUCK": (
+        "이 기간엔 아무렇게나 사도 벌었습니다",
+        "무작위 매매가 1위였습니다. 이번 회차 수익률로는 원칙의 좋고 나쁨을 판단하지 마세요.",
+        "PERFORMANCE_CONTEXT",
+    ),
+    "USER_AHEAD_DISCIPLINED": (
+        "결과도 좋았고, 원칙도 지켰습니다",
+        "직접 한 매매가 1위였고 원칙을 어긴 거래도 반복되지 않았습니다. 지금 방식을 유지할 근거가 있습니다.",
+        "PRINCIPLE_EVALUATIONS",
+    ),
+    "USER_AHEAD_LUCKY": (
+        "1위였지만, 원칙을 지켜서 얻은 결과는 아닙니다",
+        "직접 한 매매가 1위였습니다. 다만 스스로 정한 기준을 반복해서 넘겼기 때문에 같은 방식이 반복되면 결과는 달라질 수 있습니다.",
+        "PRINCIPLE_EVALUATIONS",
+    ),
+    "BOT_AHEAD": (
+        "원칙을 그대로 지킨 쪽이 앞섰습니다",
+        "당신의 원칙만 따라 매매한 결과가 실제 매매보다 좋았습니다. 어디서 갈라졌는지 거래 단위로 확인해 보세요.",
+        "DIVERGENCE",
+    ),
+    "REFERENCE_AHEAD": (
+        "비교 전략이 앞선 기간입니다",
+        "이 전략은 당신 원칙에 없는 기준을 사용합니다. 수익률이 아니라 그 기준이 무엇인지를 보세요.",
+        "REFERENCE_PRINCIPLES",
+    ),
+}
+
+
+def _build_outcome(
+    participant_summary: List[dict],
+    simulated_trades: List[dict],
+    review_summary: dict,
+    coverage: dict,
+) -> dict:
+    """The report's spine: one ranked answer, and where to look next."""
+    ranked = _rank_participants(participant_summary, simulated_trades)
+    branch = _outcome_branch(ranked, review_summary)
+    headline, detail, focus = OUTCOME_COPY[branch]
+    actual = next((item for item in ranked if item["variantType"] == "ACTUAL_USER"), None)
+    personal = next((item for item in ranked if item["variantType"] == "PERSONAL_BOT"), None)
+    gap = (
+        round(personal["cumulativeReturnPercent"] - actual["cumulativeReturnPercent"], 2)
+        if actual and personal
+        else None
+    )
+    return {
+        "branch": branch,
+        "headline": headline,
+        "detail": detail,
+        "focusSection": focus,
+        "winnerVariantType": ranked[0]["variantType"] if ranked else None,
+        "ranking": ranked,
+        "evidence": {
+            "actualReturnPercent": actual["cumulativeReturnPercent"] if actual else None,
+            "principleBotReturnPercent": personal["cumulativeReturnPercent"] if personal else None,
+            "principleBotGapPercentPoint": gap,
+            "assessedTradeCount": review_summary.get("assessedTradeCount", 0),
+            "violatedTradeCount": review_summary.get("violatedCount", 0),
+            "uncoveredTradeCount": coverage.get("uncoveredTradeCount", 0),
+            "totalTradeCount": review_summary.get("totalTradeCount", 0),
+        },
+        "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+    }
+
+
+def _build_principle_set_diagnostics(
+    catalog: List[dict],
+    decision_reviews: List[dict],
+    rule_schema: Optional[dict] = None,
+) -> dict:
+    """Judge the principle set as a whole, not one principle at a time.
+
+    Per-principle verdicts can all read "fine" while the set has no sell rule at
+    all, or two principles quietly bound to the same rule path.
+    """
+    audit = (rule_schema or {}).get("audit") if isinstance(rule_schema, dict) else {}
+    audit = audit if isinstance(audit, dict) else {}
+    interpreted_principles = audit.get("interpreted_principles") or audit.get("interpretedPrinciples") or []
+    principle_conflicts = audit.get("principle_conflicts") or audit.get("principleConflicts") or []
+
+    covered_trade_ids = set()
+    applicable_by_section: Dict[str, int] = defaultdict(int)
+    for review in decision_reviews:
+        for match in review.get("principleMatches", []):
+            if match.get("applicability") != "APPLICABLE":
+                continue
+            covered_trade_ids.add(review.get("tradeId"))
+            section = str(match.get("targetRule") or "").split(".", 1)[0]
+            if section:
+                applicable_by_section[section] += 1
+
+    uncovered = [
+        review for review in decision_reviews
+        if review.get("tradeId") not in covered_trade_ids
+    ]
+    total_trade_count = len(decision_reviews)
+
+    declared_sections = {
+        str(principle.get("targetRule") or "").split(".", 1)[0]
+        for principle in catalog
+        if principle.get("targetRule")
+    }
+    buy_trade_count = sum(review.get("action") in {"BUY", "ADD"} for review in decision_reviews)
+    sell_trade_count = sum(review.get("action") in {"SELL", "REDUCE"} for review in decision_reviews)
+    missing_sections = []
+    if buy_trade_count and not declared_sections.intersection(BUY_RULE_SECTIONS):
+        missing_sections.append({
+            "sectionGroup": "BUY",
+            "sections": list(BUY_RULE_SECTIONS),
+            "relatedTradeCount": buy_trade_count,
+            "message": f"매수 거래 {buy_trade_count}건을 설명할 원칙이 없습니다.",
+        })
+    if sell_trade_count and not declared_sections.intersection(SELL_RULE_SECTIONS):
+        missing_sections.append({
+            "sectionGroup": "SELL",
+            "sections": list(SELL_RULE_SECTIONS),
+            "relatedTradeCount": sell_trade_count,
+            "message": f"매도 거래 {sell_trade_count}건을 설명할 원칙이 없습니다.",
+        })
+
+    by_rule: Dict[str, List[dict]] = defaultdict(list)
+    for principle in catalog:
+        if principle.get("targetRule"):
+            by_rule[str(principle["targetRule"])].append(principle)
+    duplicates = [
+        {
+            "targetRule": target_rule,
+            "principleSetItemIds": [item.get("principleSetItemId") for item in items],
+            "principleTexts": [item.get("principleText") for item in items],
+            "message": (
+                f"{len(items)}개 원칙이 같은 실행 규칙({target_rule})에 연결되어 "
+                "통계가 중복 집계됩니다."
+            ),
+        }
+        for target_rule, items in sorted(by_rule.items())
+        if len(items) > 1
+    ]
+
+    # A principle that cannot become a rule used to sit in REVIEW with no
+    # explanation, run after run. The compiler now says why, so carry it here.
+    reason_by_text = {
+        str(item.get("user_natural_text") or item.get("userNaturalText") or "").strip():
+            str(item.get("unmappable_reason") or item.get("unmappableReason") or "")
+        for item in interpreted_principles
+        if isinstance(item, dict)
+    }
+    unmapped = [
+        {
+            "principleSetItemId": principle.get("principleSetItemId"),
+            "principleText": principle.get("principleText"),
+            "reason": reason_by_text.get(str(principle.get("principleText") or "").strip())
+            or "실행 규칙으로 해석되지 않아 원칙 문구와 기준을 직접 검토해야 합니다.",
+        }
+        for principle in catalog
+        if not principle.get("targetRule") or str(principle.get("status")) != "CONFIRMED"
+    ]
+
+    # Semantic clashes the rule paths cannot see: two principles in different
+    # sections that tell the user to do opposite things in the same moment.
+    known_texts = {str(principle.get("principleText") or "").strip() for principle in catalog}
+    conflicts = [
+        {
+            "firstPrincipleText": str(item.get("first_principle_text") or item.get("firstPrincipleText") or "").strip(),
+            "secondPrincipleText": str(item.get("second_principle_text") or item.get("secondPrincipleText") or "").strip(),
+            "conflictType": str(item.get("conflict_type") or item.get("conflictType") or "CONTRADICTION"),
+            "reason": str(item.get("reason") or ""),
+            "judgmentSource": "LLM_PRINCIPLE_REVIEW",
+        }
+        for item in principle_conflicts
+        if isinstance(item, dict)
+    ]
+    conflicts = [
+        item for item in conflicts
+        if item["firstPrincipleText"] in known_texts
+        and item["secondPrincipleText"] in known_texts
+    ]
+
+    return {
+        "principleCount": len(catalog),
+        "conflicts": conflicts,
+        "coverage": {
+            "totalTradeCount": total_trade_count,
+            "coveredTradeCount": len(covered_trade_ids),
+            "uncoveredTradeCount": len(uncovered),
+            "uncoveredTradeRatePercent": (
+                round(len(uncovered) / total_trade_count * 100, 1) if total_trade_count else None
+            ),
+            "uncoveredTradeIds": [review.get("tradeId") for review in uncovered][:20],
+            "applicableCountBySection": {
+                section: applicable_by_section.get(section, 0)
+                for section in SECTION_LABELS
+            },
+            "sectionLabels": SECTION_LABELS,
+        },
+        "missingSections": missing_sections,
+        "duplicateRules": duplicates,
+        "unmappedPrinciples": unmapped,
+        "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+    }
+
+
+def _build_performance_context(
+    analytics: dict,
+    participant_summary: List[dict],
+) -> dict:
+    """Surface the comparison numbers the backtest already produced.
+
+    The simulation computes a benchmark set and a random-bot distribution, but
+    the report used to drop both, leaving "why did I lose" unanswered.
+    """
+    actual_return = _participant_return(participant_summary, "ACTUAL_USER", 1)
+    personal_return = _participant_return(participant_summary, "PERSONAL_BOT", 2)
+
+    distribution = analytics.get("randomDistribution") or {}
+    values = distribution.get("distributionPercent") or []
+    actual_percentile = (
+        round(sum(value <= actual_return for value in values) / len(values) * 100, 1)
+        if values
+        else None
+    )
+    luck_check = None
+    if actual_percentile is not None:
+        # 무작위 매매의 몇 퍼센트가 이 기간에 돈을 벌었는지가, 그 기간이
+        # 누구에게나 관대했는지를 가장 직접적으로 말해 줍니다.
+        profitable_percent = round(sum(value > 0 for value in values) / len(values) * 100, 1)
+        luck_check = {
+            "runCount": distribution.get("runCount"),
+            "actualUserPercentile": actual_percentile,
+            "personalBotPercentile": distribution.get("personalBotPercentile"),
+            "medianReturnPercent": distribution.get("medianReturnPercent"),
+            "lowerQuartileReturnPercent": distribution.get("lowerQuartileReturnPercent"),
+            "upperQuartileReturnPercent": distribution.get("upperQuartileReturnPercent"),
+            "minimumReturnPercent": distribution.get("minimumReturnPercent"),
+            "maximumReturnPercent": distribution.get("maximumReturnPercent"),
+            "profitableRunPercent": profitable_percent,
+            "summary": (
+                f"무작위 매매 {distribution.get('runCount')}회 분포에서 "
+                f"실제 투자 수익률은 상위 {round(100 - actual_percentile, 1)}% 수준입니다."
+            ),
+            "periodSummary": (
+                f"무작위로 사고팔았을 때도 {profitable_percent:g}%가 수익을 냈습니다."
+                if profitable_percent >= 50
+                else f"무작위로 사고팔았을 때 수익을 낸 경우는 {profitable_percent:g}%였습니다."
+            ),
+            "disclaimer": "무작위 분포 비교는 실력 검증이 아니라 결과의 우연성 참고 지표입니다.",
+        }
+
+    benchmarks = []
+    for item in analytics.get("benchmarks") or []:
+        benchmark_return = item.get("returnPercent")
+        if benchmark_return is None:
+            continue
+        benchmarks.append({
+            "benchmark": item.get("benchmark"),
+            "returnPercent": benchmark_return,
+            "method": item.get("method"),
+            "actualExcessPercentPoint": round(actual_return - float(benchmark_return), 2),
+            "personalBotExcessPercentPoint": round(personal_return - float(benchmark_return), 2),
+        })
+
+    contributions = [
+        item for item in (analytics.get("securityContributions") or [])
+        if int(item.get("variantId") or 0) in ACTUAL_VARIANT_IDS
+    ]
+    total_absolute = sum(abs(float(item.get("contributionAmount") or 0.0)) for item in contributions)
+    top_contributors = [
+        {
+            "securityId": item.get("securityId"),
+            "securityName": item.get("securityName"),
+            "contributionAmount": item.get("contributionAmount"),
+            "sharePercent": (
+                round(abs(float(item.get("contributionAmount") or 0.0)) / total_absolute * 100, 1)
+                if total_absolute
+                else None
+            ),
+        }
+        for item in contributions[:5]
+    ]
+
+    return {
+        "actualReturnPercent": actual_return,
+        "principleReturnPercent": personal_return,
+        "luckCheck": luck_check,
+        "benchmarks": benchmarks,
+        "topSecurityContributions": top_contributors,
+        "calculationSource": "DETERMINISTIC_ANALYTICS",
+    }
 
 
 def _principle_match_result(
@@ -633,6 +1314,92 @@ def _numeric_rule_match(
         ),
         {"actualValue": actual_number, "ruleValue": rule_number, "operator": operator},
     )
+
+
+def _combine_rule_results(principle: dict, trade: dict, results: List[dict]) -> dict:
+    """Fold one principle's several rule checks into a single judgment.
+
+    A sentence like "only buy liquid names that have not spiked" is two rules,
+    and a person reading it means both. Breaking the failure of either one is
+    breaking the principle, so any violation carries; a principle counts as
+    followed only when something applied and nothing broke.
+    """
+    judgments = [item["judgment"] for item in results]
+    if "VIOLATED" in judgments:
+        combined = "VIOLATED"
+    elif "FOLLOWED" in judgments:
+        combined = "FOLLOWED"
+    elif judgments and all(item == "NOT_APPLICABLE" for item in judgments):
+        combined = "NOT_APPLICABLE"
+    else:
+        combined = "INSUFFICIENT_DATA"
+
+    representative = next(
+        (item for item in results if item["judgment"] == combined),
+        results[0] if results else {},
+    )
+    rule_results = [
+        {
+            "targetRule": item.get("targetRule"),
+            "applicability": item.get("applicability"),
+            "judgment": item.get("judgment"),
+            "reason": item.get("reason"),
+            "evidence": item.get("evidence") or {},
+        }
+        for item in results
+    ]
+    reason = str(representative.get("reason") or "")
+    if len(results) > 1 and representative.get("targetRule"):
+        reason = f"[{representative['targetRule']}] {reason}"
+    return {
+        "principleSetItemId": principle.get("principleSetItemId"),
+        "principleText": principle.get("principleText") or "투자 원칙",
+        "targetRule": representative.get("targetRule") or principle.get("targetRule"),
+        "targetRules": [item.get("targetRule") for item in results],
+        "applicability": "APPLICABLE" if combined in {"FOLLOWED", "VIOLATED"} else combined,
+        "judgment": combined,
+        "expectedAction": representative.get("expectedAction"),
+        "actualAction": str(trade.get("tradeSide") or "HOLD"),
+        "reason": reason,
+        "evidence": representative.get("evidence") or {},
+        "ruleResults": rule_results,
+        "matchingMethod": "RULE_PREDICATE_AT_TRADE_TIME",
+    }
+
+
+def _evaluate_principle_matches(
+    principle: dict,
+    trade: dict,
+    context: dict,
+    rule_schema: dict,
+    evidence_codes: List[str],
+) -> dict:
+    """Judge every rule this principle maps onto, then combine them."""
+    rules = principle.get("rules") or []
+    if not rules:
+        return _evaluate_principle_for_trade(principle, trade, context, rule_schema, evidence_codes)
+    results = []
+    for rule in rules:
+        single = {
+            **principle,
+            "targetRule": rule.get("targetRule"),
+            "currentValue": rule.get("currentValue"),
+            "status": rule.get("status", principle.get("status")),
+        }
+        result = _evaluate_principle_for_trade(single, trade, context, rule_schema, evidence_codes)
+        result["targetRule"] = rule.get("targetRule")
+        results.append(result)
+    if len(results) == 1:
+        results[0]["targetRules"] = [results[0].get("targetRule")]
+        results[0]["ruleResults"] = [{
+            "targetRule": results[0].get("targetRule"),
+            "applicability": results[0].get("applicability"),
+            "judgment": results[0].get("judgment"),
+            "reason": results[0].get("reason"),
+            "evidence": results[0].get("evidence") or {},
+        }]
+        return results[0]
+    return _combine_rule_results(principle, trade, results)
 
 
 def _evaluate_principle_for_trade(
@@ -849,6 +1616,65 @@ def _evaluate_principle_for_trade(
     )
 
 
+def _build_reference_review(
+    catalog: List[dict],
+    references: List[dict],
+    participant_summary: List[dict],
+) -> dict:
+    """What the comparison strategy checks that the user's principles never do.
+
+    The strategy finishing first is what brings the user to this section, but it
+    is deliberately not the reason anything is suggested here: one quarter is far
+    too short to establish that a strategy is better. The reason is structural --
+    it applies a rule in an area the user has left empty -- and the return rides
+    along as a labelled reference number only.
+    """
+    strategy_return = _participant_return(
+        participant_summary,
+        VALUE_QUALITY_STRATEGY["variantType"],
+        VALUE_QUALITY_STRATEGY["variantId"],
+    )
+    user_sections = {
+        str(principle.get("targetRule") or "").split(".", 1)[0]
+        for principle in catalog
+        if principle.get("targetRule")
+    }
+    strategy_sections = [
+        section for section in VALUE_QUALITY_STRATEGY
+        if section in SECTION_LABELS
+    ]
+    missing = [
+        {
+            "section": section,
+            "sectionLabel": SECTION_LABELS[section],
+            "strategyRules": sorted(
+                rule for candidate in VALUE_QUALITY_REFERENCE_PRINCIPLES
+                for rule in candidate["targetRules"]
+                if str(rule).split(".", 1)[0] == section
+            ),
+        }
+        for section in strategy_sections
+        if section not in user_sections
+    ]
+    return {
+        "strategyName": VALUE_QUALITY_STRATEGY["strategyName"],
+        "botName": VALUE_QUALITY_STRATEGY["variantName"],
+        "ruleSource": "SYSTEM_STRATEGY_CONFIG",
+        "referenceReturnPercent": strategy_return,
+        # The screen must not turn this number into the reason to adopt anything.
+        "returnUsedAsEvidence": False,
+        "missingSections": missing,
+        "missingSectionCount": len(missing),
+        "references": references,
+        "adoptionMode": "REVIEW_ONLY",
+        "disclaimer": (
+            "한 기간의 수익률은 이 전략이 더 낫다는 근거가 되지 않습니다. "
+            "지금 내 원칙이 다루지 않는 영역이 무엇인지만 확인하세요."
+        ),
+        "judgmentSource": "SYSTEM_STRATEGY_CONFIG",
+    }
+
+
 def _build_reference_principles(
     analytics: dict,
     rule_schema: dict,
@@ -974,10 +1800,10 @@ def _principle_review(
             "targetRule": config["targetRule"],
         }
     return {
-        "status": "DECISION_DIFFERENCE",
+        "status": "NOT_COVERED",
         "violatedPrinciple": None,
-        "violationReason": "\uba85\uc2dc\uc801 \uc6d0\uce59 \uc704\ubc18\uc740 \ud655\uc778\ub418\uc9c0 \uc54a\uc558\uc9c0\ub9cc, \uc6d0\uce59\ubd07\uacfc \ub2e4\ub978 \ud310\ub2e8\uc774 \uc788\uc5c8\uc2b5\ub2c8\ub2e4.",
-        "recommendedAction": _recommended_action(action, bot_action, None),
+        "violationReason": "\uc774 \uac70\ub798\uc5d0 \uc801\uc6a9\ud560 \uc218 \uc788\ub294 \uc6d0\uce59\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "recommendedAction": None,
         "targetRule": None,
     }
 
@@ -1094,7 +1920,7 @@ class DeterministicReportAnalyzer:
             matched_code = next((code for code in PATTERN_CONFIG if code in codes), None)
             config = PATTERN_CONFIG.get(matched_code or "")
             principle_matches = [
-                _evaluate_principle_for_trade(
+                _evaluate_principle_matches(
                     principle_item,
                     trade,
                     principle_match_context,
@@ -1121,8 +1947,6 @@ class DeterministicReportAnalyzer:
                     "expectedAction": selected_match.get("expectedAction"),
                 }
                 principle_judgment = selected_match["judgment"]
-            elif action != bot_action:
-                principle_judgment = "DECISION_DIFFERENCE"
             elif any(item["judgment"] == "INSUFFICIENT_DATA" for item in principle_matches):
                 principle_judgment = "INSUFFICIENT_DATA"
             else:
@@ -1274,7 +2098,6 @@ class DeterministicReportAnalyzer:
         principle_review_summary = {
             "followedCount": sum(item["principleJudgment"] == "FOLLOWED" for item in decision_reviews),
             "violatedCount": sum(item["principleJudgment"] == "VIOLATED" for item in decision_reviews),
-            "decisionDifferenceCount": sum(item["principleJudgment"] == "DECISION_DIFFERENCE" for item in decision_reviews),
             "unassessedCount": sum(item["principleJudgment"] in {"NOT_APPLICABLE", "INSUFFICIENT_DATA"} for item in decision_reviews),
             "assessedTradeCount": sum(item["principleJudgment"] in {"FOLLOWED", "VIOLATED"} for item in decision_reviews),
             "totalTradeCount": len(decision_reviews),
@@ -1315,7 +2138,8 @@ class DeterministicReportAnalyzer:
         )
         evaluation_counts = {
             verdict: sum(item["verdict"] == verdict for item in principle_evaluations)
-            for verdict in ("KEEP", "STRENGTHEN", "REVISE", "REVIEW", "INSUFFICIENT_DATA")
+            for verdict in ("KEEP", "STRENGTHEN", "REVISE", "REVIEW", "EARLY_SIGNAL",
+                            "CONFIRM_THRESHOLD", "INSUFFICIENT_DATA")
         }
         principle_evaluation_summary = {
             "totalCount": len(principle_evaluations),
@@ -1323,8 +2147,16 @@ class DeterministicReportAnalyzer:
             "strengthenCount": evaluation_counts["STRENGTHEN"],
             "reviseCount": evaluation_counts["REVISE"],
             "reviewCount": evaluation_counts["REVIEW"],
+            "earlySignalCount": evaluation_counts["EARLY_SIGNAL"],
+            "confirmThresholdCount": evaluation_counts["CONFIRM_THRESHOLD"],
             "insufficientDataCount": evaluation_counts["INSUFFICIENT_DATA"],
         }
+        principle_set_diagnostics = _build_principle_set_diagnostics(
+            principle_catalog,
+            decision_reviews,
+            rule_schema,
+        )
+        performance_context = _build_performance_context(analytics, participant_summary)
         reference_principles = _build_reference_principles(
             analytics,
             rule_schema,
@@ -1332,8 +2164,24 @@ class DeterministicReportAnalyzer:
             participant_summary,
         )
 
+        outcome = _build_outcome(
+            participant_summary,
+            simulated_trades,
+            principle_review_summary,
+            principle_set_diagnostics["coverage"],
+        )
+
+        divergence_review = _build_divergence_review(
+            analytics,
+            simulated_trades,
+            decision_reviews,
+            outcome["evidence"],
+        )
+
         return {
-            "reportVersion": "DETERMINISTIC_V13",
+            "reportVersion": REPORT_IDENTITY,
+            "outcome": outcome,
+            "divergenceReview": divergence_review,
             "principleReviewSummary": principle_review_summary,
             "decisionReviews": decision_reviews,
             "keyTradeReviews": key_trade_reviews,
@@ -1342,11 +2190,12 @@ class DeterministicReportAnalyzer:
             "learningInsights": learning_insights,
             "principleEvaluationSummary": principle_evaluation_summary,
             "principleEvaluations": principle_evaluations,
-            "principleDiscoveries": [],
+            "principleSetDiagnostics": principle_set_diagnostics,
+            "performanceContext": performance_context,
             "principleReinforcements": principle_reinforcements,
-            "recommendedPrinciples": principle_reinforcements,
-            "improvementActions": [],
-            "referencePrinciples": reference_principles,
+            "referenceReview": _build_reference_review(
+                principle_catalog, reference_principles, participant_summary
+            ),
             "generationMetadata": {
                 "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
                 "narrativeSource": "NOT_REQUESTED",

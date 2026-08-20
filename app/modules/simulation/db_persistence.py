@@ -24,6 +24,32 @@ VARIANT_TYPE_TO_API_ID = {
 SIMULATION_ENGINE_VERSION = "v2.5"
 
 
+class SimulationPersistenceError(RuntimeError):
+    """저장 전제가 갖춰지지 않아 시뮬레이션 실행을 기록할 수 없을 때."""
+
+
+def _active_principle_set_id(cur, user_id: int) -> int:
+    """실행이 어떤 원칙 세트로 판정됐는지 기록하기 위한 조회.
+
+    상수를 쓰면 실행에 남는 원칙 세트가 실제와 달라지고, 그 id가 없는
+    데이터베이스에서는 외래키 제약에 걸립니다.
+    """
+    cur.execute(
+        """
+        SELECT principle_set_id FROM principle_sets
+        WHERE user_id = %s AND set_status = 'ACTIVE'
+        ORDER BY principle_set_id DESC LIMIT 1
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise SimulationPersistenceError(
+            f"사용자 {user_id}의 활성 원칙 세트가 없어 시뮬레이션을 기록할 수 없습니다."
+        )
+    return int(row[0])
+
+
 def reserve_simulation_run_to_db(
     user_id: int,
     period_start: str,
@@ -34,6 +60,7 @@ def reserve_simulation_run_to_db(
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            principle_set_id = _active_principle_set_id(cur, user_id)
             cur.execute(
                 """
                 INSERT INTO simulation_runs
@@ -41,7 +68,8 @@ def reserve_simulation_run_to_db(
                  simulation_version, engine_version, run_status, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, 'RUNNING', NOW())
                 """,
-                (user_id, 1, period_start, period_end, initial_capital, "v1.0", SIMULATION_ENGINE_VERSION),
+                (user_id, principle_set_id, period_start, period_end, initial_capital,
+                 "v1.0", SIMULATION_ENGINE_VERSION),
             )
             simulation_run_id = int(cur.lastrowid)
         conn.commit()
@@ -153,7 +181,8 @@ def save_simulation_run_to_db(
                      simulation_version, engine_version, run_status, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, 'RUNNING', NOW())
                     """,
-                    (user_id, 1, period_start, period_end, initial_capital, "v1.0", SIMULATION_ENGINE_VERSION),
+                    (user_id, _active_principle_set_id(cur, user_id), period_start,
+                     period_end, initial_capital, "v1.0", SIMULATION_ENGINE_VERSION),
                 )
                 sim_run_id = int(cur.lastrowid)
             else:

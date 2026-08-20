@@ -38,7 +38,11 @@ class SavePrinciplesRequest(BaseModel):
 
 class AcceptPrincipleProposalRequest(BaseModel):
     simulationId: int
-    recommendationId: int
+    # recommendationId is positional and can shift when the principle order
+    # changes. evaluationId is derived from principleSetItemId and is stable, so
+    # new clients should send it and let recommendationId stay for old ones.
+    recommendationId: Optional[int] = None
+    evaluationId: Optional[str] = None
 
 
 def _rule_path_exists(rule_json: dict, dotted_path: str) -> bool:
@@ -67,27 +71,38 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
         get_db_connection,
         load_simulation_from_db_by_id,
     )
+    from app.modules.simulation.report_analysis import REPORT_IDENTITY
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
-    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11", "DETERMINISTIC_V12", "DETERMINISTIC_V13"}:
+    if report.get("reportVersion") != REPORT_IDENTITY:
         raise HTTPException(status_code=409, detail="새 분석 버전의 리포트를 먼저 조회해 주세요.")
     evaluation_suggestions = [
         item.get("suggestion")
         for item in report.get("principleEvaluations", [])
         if isinstance(item, dict) and isinstance(item.get("suggestion"), dict)
     ]
-    proposals = (
-        report.get("principleDiscoveries", [])
-        + report.get("principleReinforcements", [])
-        + evaluation_suggestions
-    )
-    proposal = next(
-        (item for item in proposals if int(item.get("recommendationId") or 0) == req.recommendationId),
-        None,
-    )
+    proposals = report.get("principleReinforcements", []) + evaluation_suggestions
+    if req.evaluationId is None and req.recommendationId is None:
+        raise HTTPException(status_code=422, detail="evaluationId 또는 recommendationId가 필요합니다.")
+    proposal = None
+    if req.evaluationId:
+        proposal = next(
+            (item for item in proposals if str(item.get("evaluationId") or "") == req.evaluationId),
+            None,
+        )
+    if not proposal and req.recommendationId is not None:
+        proposal = next(
+            (item for item in proposals if int(item.get("recommendationId") or 0) == req.recommendationId),
+            None,
+        )
     if not proposal:
         raise HTTPException(status_code=404, detail="적용할 원칙 제안을 찾을 수 없습니다.")
+    # The idempotency table is keyed on recommendationId, so resolve it from the
+    # stored proposal rather than trusting the client's positional guess.
+    recommendation_id = int(proposal.get("recommendationId") or req.recommendationId or 0)
+    if not recommendation_id:
+        raise HTTPException(status_code=422, detail="원칙 제안에 적용 식별자가 없습니다.")
 
     conn = get_db_connection()
     try:
@@ -104,7 +119,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                 """,
                 (
                     req.simulationId,
-                    req.recommendationId,
+                    recommendation_id,
                     proposal_type,
                     json.dumps(proposal, ensure_ascii=False),
                 ),
@@ -122,7 +137,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                       AND app.recommendation_id = %s
                     FOR UPDATE
                     """,
-                    (req.simulationId, req.recommendationId),
+                    (req.simulationId, recommendation_id),
                 )
                 existing = cur.fetchone()
                 if existing and existing[0] == "APPLIED":
@@ -141,7 +156,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                             else "REINFORCEMENT_UPDATED"
                         ),
                         "principleSetItemId": existing[2],
-                        "recommendationId": req.recommendationId,
+                        "recommendationId": recommendation_id,
                         "principleText": existing[3] or "",
                         "ruleJson": existing_rule,
                         "idempotentReplay": True,
@@ -157,6 +172,10 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
             principle_set_id = int(row[0])
             principle_text = proposal.get("description") or proposal.get("title") or "투자 원칙"
             rule_json = proposal.get("ruleJson") or {}
+            # Reinforcement tightens the execution threshold this service owns.
+            # The sentence itself belongs to the principle service and to the
+            # user who wrote it, so it is never overwritten here.
+            source_principle_text = str(proposal.get("sourcePrincipleText") or "").strip()
 
             if proposal.get("proposalType") == "DISCOVERY":
                 cur.execute(
@@ -222,11 +241,10 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                 cur.execute(
                     """
                     UPDATE principle_set_items
-                    SET principle_text = %s, rule_json = %s
+                    SET rule_json = %s
                     WHERE principle_set_item_id = %s
                     """,
                     (
-                        principle_text,
                         json.dumps(merged_rule, ensure_ascii=False),
                         candidate[0],
                     ),
@@ -234,6 +252,9 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                 principle_item_id = int(candidate[0])
                 applied_type = "REINFORCEMENT_UPDATED"
                 applied_rule_json = merged_rule
+                # Report back the sentence that is actually stored, not the
+                # generic template text bundled with the proposal.
+                principle_text = str(candidate[1] or "") or source_principle_text or principle_text
             cur.execute(
                 """
                 UPDATE principle_proposal_applications
@@ -244,14 +265,14 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                   AND user_id = 1
                   AND recommendation_id = %s
                 """,
-                (principle_item_id, req.simulationId, req.recommendationId),
+                (principle_item_id, req.simulationId, recommendation_id),
             )
         conn.commit()
         return {
             "status": "SUCCESS",
             "applicationType": applied_type,
             "principleSetItemId": principle_item_id,
-            "recommendationId": req.recommendationId,
+            "recommendationId": recommendation_id,
             "principleText": principle_text,
             "ruleJson": applied_rule_json,
             "idempotentReplay": False,
