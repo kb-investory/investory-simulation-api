@@ -32,7 +32,7 @@ jobs:
           pip install --no-cache-dir pytest
 
       - name: Run tests
-        run: pytest tests/ -q
+        run: python -m pytest tests/ -q
 
       - name: Verify app imports
         run: python -c "import app.main"
