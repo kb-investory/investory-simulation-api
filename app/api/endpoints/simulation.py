@@ -2,14 +2,15 @@
 ================================================================================
 [API Endpoint Router] simulation.py
 ================================================================================
-■ 프론트엔드 대응 엔드포인트 (7종 완전 매핑):
-  1. GET  /api/simulation/simulations/overview            : 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
-  2. POST /api/simulation/simulation-bots/compile         : 최신 원칙 봇 생성/컴파일 요청 (대응 화면: Inbqv)
-  3. GET  /api/simulation/simulation-bots/compile-jobs/{jobId} : 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
-  4. GET  /api/simulation/simulation-bots/comparators      : 비교 기준 봇 목록 조회 (대응 화면: Huymt)
-  5. POST /api/simulation/simulations/run                  : 시뮬레이션 실행 (대응 화면: y9DNLy)
-  6. GET  /api/simulation/simulations/{simulationId}       : 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
-  7. GET  /api/simulation/simulations/latest               : 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
+■ 프론트엔드 대응 엔드포인트 (8종 완전 매핑):
+  1. GET  /api/simulation/overview                        : 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
+  2. POST /api/simulation/bots/compile                     : 최신 원칙 봇 생성/컴파일 요청 (대응 화면: Inbqv)
+  3. GET  /api/simulation/bots/compile-jobs/{jobId}        : 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
+  4. GET  /api/simulation/bots/comparators                 : 비교 기준 봇 목록 조회 (대응 화면: Huymt)
+  5. POST /api/simulation/run                              : 시뮬레이션 실행 (대응 화면: y9DNLy)
+  6. GET  /api/simulation/latest                           : 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
+  7. GET  /api/simulation/{simulationId}                   : 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
+  8. GET  /api/simulation/{simulationId}/report            : AI 시뮬레이션 복기 및 결과 리포트 조회
 ================================================================================
 """
 
@@ -195,7 +196,7 @@ def _get_overview_db_task(requested_account_id: Optional[int] = None):
     overview["accountId"] = account_id
     return overview
 
-@router.get("/simulations/overview", summary="1. 시뮬레이션 개요 및 준비 상태 조회")
+@router.get("/overview", summary="1. 시뮬레이션 개요 및 준비 상태 조회")
 async def get_simulation_overview(
     start_date: Optional[str] = None,
     account_id: Optional[int] = None,
@@ -248,8 +249,7 @@ async def get_simulation_overview(
 # ==============================================================================
 # 1-1. 초기 자금 계산 API (holding_snapshots ERD 기반)
 # ==============================================================================
-@router.get("/simulations/initial-capital", summary="초기 자금 계산 (holding_snapshots ERD 기반)")
-@router.get("/simulations/calculate-initial-capital", summary="초기 자금 계산 하위 호환 엔드포인트")
+@router.get("/initial-capital", summary="초기 자금 계산 (holding_snapshots ERD 기반)")
 def calculate_initial_capital(
     start_date: Optional[str] = None,
     account_id: Optional[int] = None,
@@ -297,8 +297,7 @@ def calculate_initial_capital(
 # ==============================================================================
 # 2. 최신 원칙 봇 생성 요청 (대응 화면: Inbqv)
 # ==============================================================================
-@router.post("/simulation-bots/compile", summary="2. 최신 원칙 봇 생성/컴파일 요청")
-@router.post("/rules/compile", summary="AI Rule Compiler 하위 호환 엔드포인트")
+@router.post("/bots/compile", summary="2. 최신 원칙 봇 생성/컴파일 요청")
 def compile_simulation_bot(req: RuleCompileRequest):
     """
     [대응 화면: Inbqv]
@@ -380,7 +379,7 @@ def compile_simulation_bot(req: RuleCompileRequest):
 # ==============================================================================
 # 3. 최신 원칙 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
 # ==============================================================================
-@router.get("/simulation-bots/compile-jobs/{job_id}", summary="3. 원칙 봇 생성 상태 비동기 조회")
+@router.get("/bots/compile-jobs/{job_id}", summary="3. 원칙 봇 생성 상태 비동기 조회")
 def get_compile_job_status(job_id: str):
     """
     [대응 화면: Inbqv, AZCR3]
@@ -468,7 +467,7 @@ def _rule_confirmation_view(
     }
 
 
-@router.get("/simulation-bots/rule-confirmations", summary="4-1. 실행 기준 확정 상태 조회")
+@router.get("/bots/rule-confirmations", summary="4-1. 실행 기준 확정 상태 조회")
 def get_rule_confirmations():
     """
     [대응 화면: 원칙 봇 기준 확인]
@@ -486,7 +485,7 @@ def get_rule_confirmations():
         ) from error
 
 
-@router.post("/simulation-bots/rule-confirmations", summary="4-2. 실행 기준 확정")
+@router.post("/bots/rule-confirmations", summary="4-2. 실행 기준 확정")
 def save_rule_confirmations(req: RuleConfirmationRequest):
     """
     [대응 화면: 원칙 봇 기준 확인]
@@ -530,7 +529,7 @@ def save_rule_confirmations(req: RuleConfirmationRequest):
         ) from error
 
 
-@router.get("/simulation-bots/comparators", summary="4. 대조 비교 참가자 봇 4종 목록 조회")
+@router.get("/bots/comparators", summary="4. 대조 비교 참가자 봇 4종 목록 조회")
 def get_comparator_bots(
     personalBotId: Optional[str] = None,
     accountId: Optional[int] = None,
@@ -560,7 +559,7 @@ def get_comparator_bots(
 # ==============================================================================
 # 5. 시뮬레이션 백테스트 실행 (대응 화면: y9DNLy)
 # ==============================================================================
-@router.post("/simulations/run", summary="5. 4개 비교 참가자 시뮬레이션 백테스트 실행")
+@router.post("/run", summary="5. 4개 비교 참가자 시뮬레이션 백테스트 실행")
 def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks = None):
     """
     [대응 화면: y9DNLy]
@@ -598,7 +597,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
 # ==============================================================================
 # 5-1. 시뮬레이션 비동기 실행 상태 조회
 # ==============================================================================
-@router.get("/simulations/{simulation_id}/status", summary="5-1. 시뮬레이션 실행 상태 비동기 조회")
+@router.get("/{simulation_id}/status", summary="5-1. 시뮬레이션 실행 상태 비동기 조회")
 def get_simulation_run_status(simulation_id: int):
     """
     [대응 화면: y9DNLy 진행률 폴링]
@@ -630,7 +629,7 @@ def get_simulation_run_status(simulation_id: int):
 # ==============================================================================
 # 5-2. 과거 시뮬레이션 히스토리 목록 조회 (대응 화면: 대시보드 하단 이력)
 # ==============================================================================
-@router.get("/simulations/history", summary="5-2. 과거 시뮬레이션 히스토리 목록 조회")
+@router.get("/history", summary="5-2. 과거 시뮬레이션 히스토리 목록 조회")
 def get_simulation_history():
     """
     [대응 화면: SimulationDashboard.vue 이력 목록]
@@ -643,7 +642,7 @@ def get_simulation_history():
 # ==============================================================================
 # 6. 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
 # ==============================================================================
-@router.get("/simulations/latest", summary="6. 최근 시뮬레이션 성과 및 결과 조회")
+@router.get("/latest", summary="6. 최근 시뮬레이션 성과 및 결과 조회")
 async def get_latest_simulation():
     """
     [대응 화면: xCJcT]
@@ -666,7 +665,7 @@ async def get_latest_simulation():
 # ==============================================================================
 # 7. 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
 # ==============================================================================
-@router.get("/simulations/{simulation_id}", summary="7. 특정 시뮬레이션 상세 결과 조회")
+@router.get("/{simulation_id}", summary="7. 특정 시뮬레이션 상세 결과 조회")
 def get_simulation_detail(simulation_id: int):
     """
     [대응 화면: p3vHxf, rGj4P, GTmqX]
@@ -727,7 +726,7 @@ def get_simulation_detail(simulation_id: int):
 # ==============================================================================
 # 8. 새 결과 리포트 API (대응 화면: 리포트 탭 / 결과 복기)
 # ==============================================================================
-@router.get("/simulations/{simulation_id}/report", summary="8. AI 시뮬레이션 복기 및 결과 리포트 조회")
+@router.get("/{simulation_id}/report", summary="8. AI 시뮬레이션 복기 및 결과 리포트 조회")
 def get_simulation_report(simulation_id: int, background_tasks: BackgroundTasks):
     """
     [대응 화면: 리포트 탭 / 결과 복기]
