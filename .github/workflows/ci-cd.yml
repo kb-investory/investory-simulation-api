@@ -11,7 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  REGISTRY: ghcr.io
   IMAGE_NAME: investory-simulation-api
+  CONTAINER_NAME: investory-simulation-api
 
 jobs:
   test:
@@ -43,74 +45,71 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      packages: write
     outputs:
-      image: ${{ steps.image.outputs.image }}
+      image: ${{ steps.meta.outputs.image }}
     steps:
       - uses: actions/checkout@v4
 
-      - id: auth
-        uses: google-github-actions/auth@v2
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.GCP_AR_REGION }}-docker.pkg.dev --quiet
-
-      - id: image
+      - id: meta
         name: Resolve image tag
         run: |
-          IMAGE="${{ vars.GCP_AR_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ env.IMAGE_NAME }}"
+          IMAGE="${{ env.REGISTRY }}/$(echo '${{ github.repository_owner }}/${{ env.IMAGE_NAME }}' | tr '[:upper:]' '[:lower:]')"
           echo "image=$IMAGE:${{ github.sha }}" >> "$GITHUB_OUTPUT"
           echo "image_latest=$IMAGE:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         run: |
           docker build \
-            -t ${{ steps.image.outputs.image }} \
-            -t ${{ steps.image.outputs.image_latest }} \
+            -t ${{ steps.meta.outputs.image }} \
+            -t ${{ steps.meta.outputs.image_latest }} \
             .
 
       - name: Push image
         run: |
-          docker push ${{ steps.image.outputs.image }}
-          docker push ${{ steps.image.outputs.image_latest }}
+          docker push ${{ steps.meta.outputs.image }}
+          docker push ${{ steps.meta.outputs.image_latest }}
 
   deploy:
-    name: Deploy to GCE
+    name: Deploy to VM
     needs: build-and-push
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      packages: read
     steps:
-      - id: auth
-        uses: google-github-actions/auth@v2
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          IMAGE: ${{ needs.build-and-push.outputs.image }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Deploy over SSH (IAP tunnel, service-account auth)
-        run: |
-          gcloud compute ssh ${{ vars.GCE_INSTANCE_NAME }} \
-            --zone ${{ vars.GCE_ZONE }} \
-            --tunnel-through-iap \
-            --quiet \
-            --command "
-              set -e
-              gcloud auth configure-docker ${{ vars.GCP_AR_REGION }}-docker.pkg.dev --quiet
-              docker pull ${{ needs.build-and-push.outputs.image }}
-              docker stop ${{ env.IMAGE_NAME }} || true
-              docker rm ${{ env.IMAGE_NAME }} || true
-              docker run -d \
-                --name ${{ env.IMAGE_NAME }} \
-                --env-file /opt/${{ env.IMAGE_NAME }}/.env \
-                -p 8000:8000 \
-                --restart unless-stopped \
-                ${{ needs.build-and-push.outputs.image }}
-              docker image prune -f
-            "
+          host: ${{ secrets.DEPLOY_HOST }}
+          port: ${{ secrets.DEPLOY_PORT }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: IMAGE,GHCR_TOKEN,GHCR_USER,DEPLOY_PATH,CONTAINER_NAME
+          script: |
+            set -e
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker pull "$IMAGE"
+            docker stop "$CONTAINER_NAME" || true
+            docker rm "$CONTAINER_NAME" || true
+            docker run -d \
+              --name "$CONTAINER_NAME" \
+              --env-file "$DEPLOY_PATH/.env" \
+              -p 8000:8000 \
+              --restart unless-stopped \
+              "$IMAGE"
+            docker image prune -f
