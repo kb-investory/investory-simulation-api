@@ -914,7 +914,7 @@ OUTCOME_COPY = {
     "MARKET_LUCK": (
         "이 기간엔 아무렇게나 사도 벌었습니다",
         "무작위 매매가 1위였습니다. 이번 회차 수익률로는 원칙의 좋고 나쁨을 판단하지 마세요.",
-        "COVERAGE",
+        "PERFORMANCE_CONTEXT",
     ),
     "USER_AHEAD_DISCIPLINED": (
         "결과도 좋았고, 원칙도 지켰습니다",
@@ -1133,14 +1133,27 @@ def _build_performance_context(
     )
     luck_check = None
     if actual_percentile is not None:
+        # 무작위 매매의 몇 퍼센트가 이 기간에 돈을 벌었는지가, 그 기간이
+        # 누구에게나 관대했는지를 가장 직접적으로 말해 줍니다.
+        profitable_percent = round(sum(value > 0 for value in values) / len(values) * 100, 1)
         luck_check = {
             "runCount": distribution.get("runCount"),
             "actualUserPercentile": actual_percentile,
             "personalBotPercentile": distribution.get("personalBotPercentile"),
             "medianReturnPercent": distribution.get("medianReturnPercent"),
+            "lowerQuartileReturnPercent": distribution.get("lowerQuartileReturnPercent"),
+            "upperQuartileReturnPercent": distribution.get("upperQuartileReturnPercent"),
+            "minimumReturnPercent": distribution.get("minimumReturnPercent"),
+            "maximumReturnPercent": distribution.get("maximumReturnPercent"),
+            "profitableRunPercent": profitable_percent,
             "summary": (
                 f"무작위 매매 {distribution.get('runCount')}회 분포에서 "
                 f"실제 투자 수익률은 상위 {round(100 - actual_percentile, 1)}% 수준입니다."
+            ),
+            "periodSummary": (
+                f"무작위로 사고팔았을 때도 {profitable_percent:g}%가 수익을 냈습니다."
+                if profitable_percent >= 50
+                else f"무작위로 사고팔았을 때 수익을 낸 경우는 {profitable_percent:g}%였습니다."
             ),
             "disclaimer": "무작위 분포 비교는 실력 검증이 아니라 결과의 우연성 참고 지표입니다.",
         }

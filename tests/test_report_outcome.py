@@ -152,9 +152,59 @@ class OutcomePayloadTests(unittest.TestCase):
                 self.assertTrue(headline.strip())
                 self.assertTrue(detail.strip())
                 self.assertIn(focus, {
-                    "COVERAGE", "PRINCIPLE_EVALUATIONS", "DIVERGENCE", "REFERENCE_PRINCIPLES",
+                    "COVERAGE", "PRINCIPLE_EVALUATIONS", "DIVERGENCE",
+                    "REFERENCE_PRINCIPLES", "PERFORMANCE_CONTEXT",
                 })
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MarketLuckContextTests(unittest.TestCase):
+    """원숭이봇이 1위인 회차는 분포로 설명한다."""
+
+    def _context(self, distribution_percent, actual=3.0):
+        from app.modules.simulation.report_analysis import _build_performance_context
+        analytics = {
+            "randomDistribution": {
+                "runCount": len(distribution_percent),
+                "distributionPercent": sorted(distribution_percent),
+                "medianReturnPercent": 4.0,
+                "lowerQuartileReturnPercent": 1.0,
+                "upperQuartileReturnPercent": 9.0,
+                "minimumReturnPercent": min(distribution_percent),
+                "maximumReturnPercent": max(distribution_percent),
+                "personalBotPercentile": 80.0,
+            },
+        }
+        participants = [
+            {"variantId": 1, "variantType": "ACTUAL_USER", "cumulativeReturnPercent": actual},
+            {"variantId": 2, "variantType": "PERSONAL_BOT", "cumulativeReturnPercent": 6.0},
+        ]
+        return _build_performance_context(analytics, participants)["luckCheck"]
+
+    def test_a_generous_period_is_stated_as_how_many_random_runs_profited(self):
+        luck = self._context([-2.0, 1.0, 3.0, 5.0, 8.0, 12.0, 15.0, 20.0])
+
+        self.assertEqual(luck["profitableRunPercent"], 87.5)
+        self.assertIn("87.5%가 수익을 냈습니다", luck["periodSummary"])
+
+    def test_a_harsh_period_is_worded_the_other_way_round(self):
+        luck = self._context([-20.0, -12.0, -8.0, -5.0, -3.0, -1.0, 2.0, 4.0])
+
+        self.assertEqual(luck["profitableRunPercent"], 25.0)
+        self.assertIn("수익을 낸 경우는 25%", luck["periodSummary"])
+
+    def test_the_spread_is_carried_so_a_screen_can_place_the_user_in_it(self):
+        luck = self._context([-2.0, 1.0, 3.0, 5.0, 8.0, 12.0, 15.0, 20.0])
+
+        for key in ("minimumReturnPercent", "lowerQuartileReturnPercent",
+                    "medianReturnPercent", "upperQuartileReturnPercent",
+                    "maximumReturnPercent", "actualUserPercentile"):
+            self.assertIsNotNone(luck[key], key)
+
+    def test_the_market_luck_branch_looks_at_the_distribution_not_the_coverage(self):
+        from app.modules.simulation.report_analysis import OUTCOME_COPY
+
+        self.assertEqual(OUTCOME_COPY["MARKET_LUCK"][2], "PERFORMANCE_CONTEXT")
