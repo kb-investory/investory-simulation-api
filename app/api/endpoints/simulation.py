@@ -26,7 +26,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from app.api.error_responses import internal_server_error
 
 from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
@@ -43,7 +43,7 @@ from app.modules.simulation.analytics import (
     find_divergence_moments,
     run_random_monte_carlo,
 )
-from app.modules.simulation.strategies import (
+from app.modules.simulation.engine.strategies import (
     ActualUserStrategy, PersonalBotStrategy, FamousStrategyBot, RandomBotStrategy
 )
 from app.modules.simulation.models import Position

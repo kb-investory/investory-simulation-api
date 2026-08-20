@@ -1,9 +1,9 @@
 import unittest
 
 from app.api.endpoints.simulation_helpers import normalize_daily_snapshot
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import VirtualOrder
-from app.modules.simulation.strategies import BaseStrategy
+from app.modules.simulation.engine.strategies import BaseStrategy
 
 
 class BuyOnceStrategy(BaseStrategy):

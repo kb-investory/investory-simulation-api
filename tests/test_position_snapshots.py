@@ -1,8 +1,8 @@
 import unittest
 
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import Position
-from app.modules.simulation.strategies import BaseStrategy
+from app.modules.simulation.engine.strategies import BaseStrategy
 
 
 class HoldStrategy(BaseStrategy):

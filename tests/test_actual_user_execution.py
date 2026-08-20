@@ -1,7 +1,7 @@
 import unittest
 
-from app.modules.simulation.backtest import BacktestEngine
-from app.modules.simulation.strategies import ActualUserStrategy
+from app.modules.simulation.engine.backtest import BacktestEngine
+from app.modules.simulation.engine.strategies import ActualUserStrategy
 
 
 class ActualUserExecutionTests(unittest.TestCase):

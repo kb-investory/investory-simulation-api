@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 from app.modules.simulation.models import (
     Portfolio, Position, VirtualOrder, SimulatedTrade, DailySnapshot, OrderAudit
 )
-from app.modules.simulation.strategies import BaseStrategy
+from app.modules.simulation.engine.strategies import BaseStrategy
 
 class BacktestEngine:
     """결정론적 초고속 백테스트 이벤트 루프 엔진 클래스"""
