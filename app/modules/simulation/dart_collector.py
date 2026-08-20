@@ -240,7 +240,7 @@ class DartCollector:
     ) -> dict:
         """Backfill disclosures for DB securities over a simulation period."""
 
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
 
         corp_code_map = self.load_corp_code_map()
         conn = get_db_connection()
@@ -303,7 +303,7 @@ class DartCollector:
         }
 
     def _save_disclosure_items(self, items: List[dict], allow_llm: bool) -> int:
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
 
         conn = get_db_connection()
         saved_count = 0

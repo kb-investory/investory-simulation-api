@@ -12,7 +12,7 @@ from app.api.endpoints.simulation import (
 )
 from app.api.endpoints.simulation_helpers import RuleCompileRequest
 from app.modules.simulation.comparator_details import build_comparators, personal_rules
-from app.modules.simulation.repository import SimulationDataError
+from app.modules.simulation.persistence.repository import SimulationDataError
 
 
 RULE_SCHEMA = {

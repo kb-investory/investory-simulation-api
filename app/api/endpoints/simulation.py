@@ -29,9 +29,9 @@ from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.backtest import BacktestEngine
 from app.modules.simulation.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.strengthen_spec import RULE_STRENGTHEN_SPEC
-from app.modules.simulation.capital_calculator import InitialCapitalCalculator
+from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.report_generator import SimulationReportGenerator
-from app.modules.simulation.rationale_snapshots import build_rationale_type_snapshots
+from app.modules.simulation.persistence.rationale_snapshots import build_rationale_type_snapshots
 from app.modules.simulation.analytics import (
     add_personal_bot_percentile,
     calculate_action_contributions,
@@ -47,7 +47,7 @@ from app.modules.simulation.strategies import (
     ActualUserStrategy, PersonalBotStrategy, FamousStrategyBot, RandomBotStrategy
 )
 from app.modules.simulation.models import Position
-from app.modules.simulation.repository import SimulationDataError, SimulationRepository
+from app.modules.simulation.persistence.repository import SimulationDataError, SimulationRepository
 from app.modules.simulation.comparator_details import (
     RANDOM_MONTE_CARLO_RUN_COUNT,
     RANDOM_TRACE_SEED,
@@ -55,7 +55,7 @@ from app.modules.simulation.comparator_details import (
     build_personal_comparator,
 )
 from app.modules.simulation.market_index_collector import MarketIndexCollector
-from app.modules.simulation.db_persistence import (
+from app.modules.simulation.persistence.db_persistence import (
     save_simulation_run_to_db, get_simulation_history_from_db,
     find_existing_simulation_from_db, load_simulation_from_db_by_id,
     reserve_simulation_run_to_db, save_simulation_report_to_db,
@@ -1016,7 +1016,7 @@ def get_simulation_run_status(simulation_id: int):
     [대응 화면: y9DNLy 진행률 폴링]
     - 시뮬레이션 실행 작업 진행 상태(RUNNING, COMPLETED)를 조회합니다.
     """
-    from app.modules.simulation.db_persistence import get_db_connection
+    from app.modules.simulation.persistence.db_persistence import get_db_connection
 
     conn = get_db_connection()
     try:

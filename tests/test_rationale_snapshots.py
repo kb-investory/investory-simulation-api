@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.rationale_snapshots import (
+from app.modules.simulation.persistence.rationale_snapshots import (
     apply_rationale_type_snapshots,
     build_rationale_type_snapshots,
 )

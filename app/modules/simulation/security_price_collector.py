@@ -9,7 +9,7 @@ from typing import Callable, Iterable, Optional
 import FinanceDataReader as fdr
 import pandas as pd
 
-from app.modules.simulation.db_persistence import get_db_connection
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 
 class SecurityPriceCollector:

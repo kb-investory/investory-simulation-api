@@ -91,10 +91,10 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
     def test_discovery_is_appended_from_server_stored_proposal(self):
         connection = FakeConnection()
         with patch(
-            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=self._detail("DISCOVERY"),
         ), patch(
-            "app.modules.simulation.db_persistence.get_db_connection",
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
             return_value=connection,
         ):
             result = accept_principle_proposal(
@@ -119,10 +119,10 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             ruleJson={"entry": {"max_5day_return": 0.08}},
         )
         with patch(
-            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
-            "app.modules.simulation.db_persistence.get_db_connection",
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
             return_value=connection,
         ):
             result = accept_principle_proposal(
@@ -163,10 +163,10 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             }
         }
         with patch(
-            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
-            "app.modules.simulation.db_persistence.get_db_connection",
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
             return_value=connection,
         ):
             result = accept_principle_proposal(
@@ -202,10 +202,10 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             }
         }
         with patch(
-            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
-            "app.modules.simulation.db_persistence.get_db_connection",
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
             return_value=connection,
         ):
             result = accept_principle_proposal(
@@ -232,10 +232,10 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             ),
         )
         with patch(
-            "app.modules.simulation.db_persistence.load_simulation_from_db_by_id",
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=self._detail("DISCOVERY"),
         ), patch(
-            "app.modules.simulation.db_persistence.get_db_connection",
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
             return_value=connection,
         ):
             result = accept_principle_proposal(

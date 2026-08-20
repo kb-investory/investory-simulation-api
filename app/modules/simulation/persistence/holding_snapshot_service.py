@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from typing import Callable, Dict, Iterable, List
 
-from app.modules.simulation.db_persistence import get_db_connection
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 
 class SnapshotReconstructionError(RuntimeError):

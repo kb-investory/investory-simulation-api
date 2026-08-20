@@ -54,7 +54,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
                 simulation.run_simulation(request)
         self.assert_safe_500(raised.exception, "SIMULATION_RUN_INTERNAL_ERROR")
 
-    @patch("app.modules.simulation.db_persistence.get_db_connection")
+    @patch("app.modules.simulation.persistence.db_persistence.get_db_connection")
     def test_principles_endpoint_does_not_expose_db_exception(self, get_connection):
         get_connection.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(principles.logger, level="ERROR"):

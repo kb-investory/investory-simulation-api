@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.repository import SimulationRepository
+from app.modules.simulation.persistence.repository import SimulationRepository
 
 
 class FakeCursor:

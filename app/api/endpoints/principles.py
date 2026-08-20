@@ -67,7 +67,7 @@ def _merge_rule_json(base: dict, patch: dict) -> dict:
 @router.post("/principles/proposals/accept", summary="원칙 평가 강화안 적용")
 def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
     """Apply only a server-stored and validated V3 proposal to the active principle set."""
-    from app.modules.simulation.db_persistence import (
+    from app.modules.simulation.persistence.db_persistence import (
         get_db_connection,
         load_simulation_from_db_by_id,
     )
@@ -299,7 +299,7 @@ def get_recommended_principles():
     - MySQL DB 기반으로 사용자의 원칙 및 추천 원칙 목록을 조회합니다.
     """
     try:
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
         conn = get_db_connection()
         recommendations = []
         with conn.cursor() as cur:

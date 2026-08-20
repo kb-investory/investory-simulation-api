@@ -4,8 +4,8 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.api.endpoints.simulation import calculate_initial_capital
-from app.modules.simulation.capital_calculator import InitialCapitalCalculator
-from app.modules.simulation.repository import SimulationDataError
+from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
+from app.modules.simulation.persistence.repository import SimulationDataError
 
 
 class FakeRepository:
