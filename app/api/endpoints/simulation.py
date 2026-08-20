@@ -54,7 +54,7 @@ from app.modules.simulation.comparator_details import (
     build_comparators,
     build_personal_comparator,
 )
-from app.modules.simulation.market_index_collector import MarketIndexCollector
+from app.modules.simulation.collectors.market_index_collector import MarketIndexCollector
 from app.modules.simulation.persistence.db_persistence import (
     save_simulation_run_to_db, get_simulation_history_from_db,
     find_existing_simulation_from_db, load_simulation_from_db_by_id,

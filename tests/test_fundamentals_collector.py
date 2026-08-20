@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.modules.simulation.fundamentals_collector import (
+from app.modules.simulation.collectors.fundamentals_collector import (
     FundamentalsCollector,
     _date_from_text,
     _default_fiscal_period_end,

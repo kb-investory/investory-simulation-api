@@ -38,7 +38,7 @@ app.include_router(api_router, prefix=settings.API_PREFIX)
 @app.on_event("startup")
 def startup_event():
     try:
-        from app.modules.simulation.batch_cron import start_batch_scheduler
+        from app.modules.simulation.collectors.batch_cron import start_batch_scheduler
         start_batch_scheduler(run_hour=16, run_minute=30)
     except Exception as e:
         print(f"[Startup Warning] Failed to launch batch scheduler: {e}")
@@ -46,7 +46,7 @@ def startup_event():
 
 @app.on_event("shutdown")
 def shutdown_event():
-    from app.modules.simulation.batch_cron import stop_batch_scheduler
+    from app.modules.simulation.collectors.batch_cron import stop_batch_scheduler
 
     stop_batch_scheduler()
 

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.modules.simulation.market_index_collector import MarketIndexCollector
+from app.modules.simulation.collectors.market_index_collector import MarketIndexCollector
 
 
 class MarketIndexCollectorTests(unittest.TestCase):
