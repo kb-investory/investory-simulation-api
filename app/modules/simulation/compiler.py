@@ -7,10 +7,9 @@ import os
 import hashlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from app.config import settings
+from app.modules.simulation.llm_client import LLMRequestError, call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_COMPILER_PROMPT, build_user_compiler_prompt
 from app.modules.simulation.rule_schema import (
     InvestmentBotStrategySchema,
@@ -255,14 +254,15 @@ class AIRuleCompiler:
 
         trade_stats = self.analyze_trade_history(actual_trades or [])
         prompt = build_user_compiler_prompt(principles, profile, trade_stats)
-        payload = json.dumps(
-            {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_COMPILER_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "response_format": {
+        try:
+            # Rule compilation runs on the reasoning tier behind an async job,
+            # so it waits on the longer budget rather than the interactive one.
+            data = call_openai_chat_json(
+                api_key=openai_key,
+                model=self.model,
+                system_prompt=SYSTEM_COMPILER_PROMPT,
+                user_prompt=prompt,
+                response_format={
                     "type": "json_schema",
                     "json_schema": {
                         "name": "investment_bot_strategy",
@@ -270,26 +270,13 @@ class AIRuleCompiler:
                         "schema": RULE_OUTPUT_SCHEMA,
                     },
                 },
-            },
-            ensure_ascii=False,
-        ).encode("utf-8")
-        request = Request(
-            "https://api.openai.com/v1/chat/completions",
-            data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {openai_key}"},
-        )
-        try:
-            # Rule compilation runs on the reasoning tier behind an async job,
-            # so it waits on the longer budget rather than the interactive one.
-            with urlopen(request, timeout=settings.REASONING_LLM_TIMEOUT) as response:
-                result = json.loads(response.read().decode("utf-8"))
-            content = result["choices"][0]["message"]["content"]
-            data = json.loads(content)
+                timeout=settings.REASONING_LLM_TIMEOUT,
+            )
             self._validate_generated_data(data)
             self._normalize_mapped_rules(data)
             self._drop_unanchored_conflicts(data, principles)
             schema = InvestmentBotStrategySchema.from_dict(data)
-        except (HTTPError, URLError, TimeoutError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        except (LLMRequestError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
             raise RuleCompilationError(
                 "LLM_RULE_COMPILATION_FAILED",
                 f"OpenAI 규칙 생성 또는 응답 검증에 실패했습니다: {type(error).__name__}",

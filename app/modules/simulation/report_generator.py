@@ -9,12 +9,11 @@
 ================================================================================
 """
 
-import json
 import logging
-import urllib.request
 from datetime import date
 from typing import List, Optional
 
+from app.modules.simulation.llm_client import call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
 from app.modules.simulation.report_analysis import REPORT_IDENTITY, DeterministicReportAnalyzer
 from app.modules.simulation.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
@@ -256,29 +255,15 @@ class SimulationReportGenerator:
         openai_key = self.api_key
         if openai_key and not openai_key.startswith("your_") and len(openai_key) > 10:
             try:
-                payload = json.dumps({
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_REPORT_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "response_format": {"type": "json_object"}
-                }).encode("utf-8")
-
-                req = urllib.request.Request(
-                    "https://api.openai.com/v1/chat/completions",
-                    data=payload,
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {openai_key}"
-                    }
+                parsed = call_openai_chat_json(
+                    api_key=openai_key,
+                    model=self.model,
+                    system_prompt=SYSTEM_REPORT_PROMPT,
+                    user_prompt=prompt,
+                    response_format={"type": "json_object"},
+                    timeout=settings.LLM_TIMEOUT,
                 )
-
-                with urllib.request.urlopen(req, timeout=settings.LLM_TIMEOUT) as resp:
-                    result = json.loads(resp.read().decode("utf-8"))
-                    content = result["choices"][0]["message"]["content"]
-                    parsed = json.loads(content)
-                    return parsed if isinstance(parsed, dict) else None
+                return parsed if isinstance(parsed, dict) else None
             except Exception as e:
                 raise RuntimeError(
                     f"OpenAI narrative request failed: {type(e).__name__}"
