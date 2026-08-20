@@ -67,6 +67,21 @@ class MarketIndexCollector:
             "closePrice": close_price,
         }
 
+    def _table_exists(self) -> bool:
+        conn = self.connection_factory()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'market_index_daily_prices'
+                    """
+                )
+                return bool(cur.fetchone()[0])
+        finally:
+            conn.close()
+
     def _existing_pairs(self, period_start: str, period_end: str) -> set[tuple[str, str]]:
         conn = self.connection_factory()
         try:
@@ -114,6 +129,15 @@ class MarketIndexCollector:
         period_end: str,
         trading_dates: Iterable[str],
     ) -> dict:
+        # Index prices are optional: the benchmark falls back to an equal-weight
+        # universe without them. Report that plainly instead of raising a table
+        # error the caller can only swallow.
+        if not self._table_exists():
+            return {
+                "status": "TABLE_NOT_AVAILABLE",
+                "fetchedCount": 0,
+                "missingCount": 0,
+            }
         dates = sorted({date for date in trading_dates if period_start <= date <= period_end})
         existing = self._existing_pairs(period_start, period_end)
         missing = [

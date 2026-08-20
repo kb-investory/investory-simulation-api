@@ -560,6 +560,17 @@ class SimulationRepository:
         conn = self.connection_factory()
         try:
             with conn.cursor() as cur:
+                # The table ships with a migration. A server running ahead of it
+                # has nothing confirmed yet, which is a state, not a failure.
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'personal_bot_rule_confirmations'
+                    """
+                )
+                if not cur.fetchone()[0]:
+                    return []
                 cur.execute(
                     """
                     SELECT target_rule, confirmed_value_json, suggested_value_json, confirmed_at
@@ -570,11 +581,6 @@ class SimulationRepository:
                     (user_id,),
                 )
                 rows = cur.fetchall()
-        except Exception as error:
-            # The table ships with a migration; a server running ahead of it
-            # should degrade to "nothing confirmed", not fail the simulation.
-            logger.warning("Rule confirmations unavailable (%s)", type(error).__name__)
-            return []
         finally:
             conn.close()
 

@@ -7,7 +7,7 @@ from app.modules.simulation.market_index_collector import MarketIndexCollector
 class MarketIndexCollectorTests(unittest.TestCase):
     def test_missing_key_reports_fallback_state_without_network_call(self):
         collector = MarketIndexCollector(api_key="")
-        with patch.object(collector, "_existing_pairs", return_value=set()), patch.object(
+        with patch.object(collector, "_table_exists", return_value=True), patch.object(collector, "_existing_pairs", return_value=set()), patch.object(
             collector,
             "_fetch_market_date",
         ) as fetch:
@@ -33,7 +33,7 @@ class MarketIndexCollectorTests(unittest.TestCase):
             "priceDate": "2026-08-11",
             "closePrice": 912.34,
         }
-        with patch.object(collector, "_existing_pairs", return_value=existing), patch.object(
+        with patch.object(collector, "_table_exists", return_value=True), patch.object(collector, "_existing_pairs", return_value=existing), patch.object(
             collector,
             "_fetch_market_date",
             return_value=fetched_row,
@@ -56,7 +56,7 @@ class MarketIndexCollectorTests(unittest.TestCase):
             ("KOSPI", "2026-08-11"),
             ("KOSDAQ", "2026-08-11"),
         }
-        with patch.object(collector, "_existing_pairs", return_value=complete):
+        with patch.object(collector, "_table_exists", return_value=True), patch.object(collector, "_existing_pairs", return_value=complete):
             result = collector.ensure_period(
                 "2026-08-11",
                 "2026-08-11",
@@ -68,7 +68,7 @@ class MarketIndexCollectorTests(unittest.TestCase):
 
     def test_failed_preflight_stops_repeated_requests_for_each_index(self):
         collector = MarketIndexCollector(api_key="configured-key")
-        with patch.object(collector, "_existing_pairs", return_value=set()), patch.object(
+        with patch.object(collector, "_table_exists", return_value=True), patch.object(collector, "_existing_pairs", return_value=set()), patch.object(
             collector,
             "_fetch_market_date",
             side_effect=RuntimeError("forbidden"),
@@ -87,3 +87,23 @@ class MarketIndexCollectorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingTableTests(unittest.TestCase):
+    """지수 테이블이 없는 환경은 실패가 아니라 대체 상태다."""
+
+    def test_a_missing_table_reports_fallback_without_querying_or_fetching(self):
+        collector = MarketIndexCollector(api_key="configured-key")
+        with patch.object(collector, "_table_exists", return_value=False), patch.object(
+            collector, "_existing_pairs",
+        ) as existing, patch.object(collector, "_fetch_market_date") as fetch:
+            result = collector.ensure_period(
+                "2026-08-10", "2026-08-11", ["2026-08-10", "2026-08-11"],
+            )
+
+        self.assertEqual(result["status"], "TABLE_NOT_AVAILABLE")
+        self.assertEqual(result["fetchedCount"], 0)
+        # The caller falls back to an equal-weight benchmark, so neither the
+        # table nor the network is touched and nothing is logged as an error.
+        existing.assert_not_called()
+        fetch.assert_not_called()
