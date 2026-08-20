@@ -1603,6 +1603,65 @@ def _evaluate_principle_for_trade(
     )
 
 
+def _build_reference_review(
+    catalog: List[dict],
+    references: List[dict],
+    participant_summary: List[dict],
+) -> dict:
+    """What the comparison strategy checks that the user's principles never do.
+
+    The strategy finishing first is what brings the user to this section, but it
+    is deliberately not the reason anything is suggested here: one quarter is far
+    too short to establish that a strategy is better. The reason is structural --
+    it applies a rule in an area the user has left empty -- and the return rides
+    along as a labelled reference number only.
+    """
+    strategy_return = _participant_return(
+        participant_summary,
+        VALUE_QUALITY_STRATEGY["variantType"],
+        VALUE_QUALITY_STRATEGY["variantId"],
+    )
+    user_sections = {
+        str(principle.get("targetRule") or "").split(".", 1)[0]
+        for principle in catalog
+        if principle.get("targetRule")
+    }
+    strategy_sections = [
+        section for section in VALUE_QUALITY_STRATEGY
+        if section in SECTION_LABELS
+    ]
+    missing = [
+        {
+            "section": section,
+            "sectionLabel": SECTION_LABELS[section],
+            "strategyRules": sorted(
+                rule for candidate in VALUE_QUALITY_REFERENCE_PRINCIPLES
+                for rule in candidate["targetRules"]
+                if str(rule).split(".", 1)[0] == section
+            ),
+        }
+        for section in strategy_sections
+        if section not in user_sections
+    ]
+    return {
+        "strategyName": VALUE_QUALITY_STRATEGY["strategyName"],
+        "botName": VALUE_QUALITY_STRATEGY["variantName"],
+        "ruleSource": "SYSTEM_STRATEGY_CONFIG",
+        "referenceReturnPercent": strategy_return,
+        # The screen must not turn this number into the reason to adopt anything.
+        "returnUsedAsEvidence": False,
+        "missingSections": missing,
+        "missingSectionCount": len(missing),
+        "references": references,
+        "adoptionMode": "REVIEW_ONLY",
+        "disclaimer": (
+            "한 기간의 수익률은 이 전략이 더 낫다는 근거가 되지 않습니다. "
+            "지금 내 원칙이 다루지 않는 영역이 무엇인지만 확인하세요."
+        ),
+        "judgmentSource": "SYSTEM_STRATEGY_CONFIG",
+    }
+
+
 def _build_reference_principles(
     analytics: dict,
     rule_schema: dict,
@@ -2121,7 +2180,9 @@ class DeterministicReportAnalyzer:
             "principleSetDiagnostics": principle_set_diagnostics,
             "performanceContext": performance_context,
             "principleReinforcements": principle_reinforcements,
-            "referencePrinciples": reference_principles,
+            "referenceReview": _build_reference_review(
+                principle_catalog, reference_principles, participant_summary
+            ),
             "generationMetadata": {
                 "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
                 "narrativeSource": "NOT_REQUESTED",

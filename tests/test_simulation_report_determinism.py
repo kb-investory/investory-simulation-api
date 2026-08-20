@@ -653,7 +653,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
 
         report = DeterministicReportAnalyzer().build(trades, participants, analytics)
 
-        references = report["referencePrinciples"]
+        references = report["referenceReview"]["references"]
         self.assertEqual(len(references), 2)
         self.assertNotIn("REF_VALUE_QUALITY_SELECTION", [item["referenceId"] for item in references])
         self.assertEqual(references[0]["referenceId"], "REF_LIQUID_UNIVERSE")
