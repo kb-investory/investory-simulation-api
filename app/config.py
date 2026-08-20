@@ -19,7 +19,7 @@ load_dotenv()
 class Settings:
     PROJECT_NAME: str = "Investory AI Backend Server"
     VERSION: str = "1.0.0"
-    API_PREFIX: str = "/api"
+    API_PREFIX: str = "/api/simulation"
     
     # API Keys
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
