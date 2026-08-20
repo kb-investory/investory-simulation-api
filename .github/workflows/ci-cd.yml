@@ -1,0 +1,116 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: investory-simulation-api
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir pytest
+
+      - name: Run tests
+        run: pytest tests/ -q
+
+      - name: Verify app imports
+        run: python -c "import app.main"
+
+  build-and-push:
+    name: Build & push image
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REGION }}-docker.pkg.dev --quiet
+
+      - id: image
+        name: Resolve image tag
+        run: |
+          IMAGE="${{ vars.GCP_AR_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ vars.GCP_AR_REPO }}/${{ env.IMAGE_NAME }}"
+          echo "image=$IMAGE:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "image_latest=$IMAGE:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            -t ${{ steps.image.outputs.image }} \
+            -t ${{ steps.image.outputs.image_latest }} \
+            .
+
+      - name: Push image
+        run: |
+          docker push ${{ steps.image.outputs.image }}
+          docker push ${{ steps.image.outputs.image_latest }}
+
+  deploy:
+    name: Deploy to GCE
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy over SSH (IAP tunnel, service-account auth)
+        run: |
+          gcloud compute ssh ${{ vars.GCE_INSTANCE_NAME }} \
+            --zone ${{ vars.GCE_ZONE }} \
+            --tunnel-through-iap \
+            --quiet \
+            --command "
+              set -e
+              gcloud auth configure-docker ${{ vars.GCP_AR_REGION }}-docker.pkg.dev --quiet
+              docker pull ${{ needs.build-and-push.outputs.image }}
+              docker stop ${{ env.IMAGE_NAME }} || true
+              docker rm ${{ env.IMAGE_NAME }} || true
+              docker run -d \
+                --name ${{ env.IMAGE_NAME }} \
+                --env-file /opt/${{ env.IMAGE_NAME }}/.env \
+                -p 8000:8000 \
+                --restart unless-stopped \
+                ${{ needs.build-and-push.outputs.image }}
+              docker image prune -f
+            "
