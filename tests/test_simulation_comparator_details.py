@@ -11,7 +11,7 @@ from app.api.endpoints.simulation import (
     get_compile_job_status,
 )
 from app.api.endpoints.simulation_helpers import RuleCompileRequest
-from app.modules.simulation.comparator_details import build_comparators, personal_rules
+from app.modules.simulation.analytics.comparator_details import build_comparators, personal_rules
 from app.modules.simulation.persistence.repository import SimulationDataError
 
 

@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.analytics import (
+from app.modules.simulation.analytics.analytics import (
     add_personal_bot_percentile,
     calculate_action_contributions,
     calculate_benchmarks,

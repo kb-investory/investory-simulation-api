@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.report_analysis import (
+from app.modules.simulation.analytics.report_analysis import (
     DeterministicReportAnalyzer,
     _principle_catalog,
     _resolve_current_value,

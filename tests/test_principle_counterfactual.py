@@ -1,7 +1,7 @@
 import unittest
 
 from app.modules.simulation.engine.backtest import BacktestEngine
-from app.modules.simulation.counterfactual import build_principle_counterfactuals
+from app.modules.simulation.analytics.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.models import Position
 from app.modules.simulation.engine.strategies import ActualUserStrategy
 

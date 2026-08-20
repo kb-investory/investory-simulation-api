@@ -27,12 +27,12 @@ from app.api.error_responses import internal_server_error
 
 from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.engine.backtest import BacktestEngine
-from app.modules.simulation.counterfactual import build_principle_counterfactuals
+from app.modules.simulation.analytics.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
-from app.modules.simulation.report_generator import SimulationReportGenerator
+from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
 from app.modules.simulation.persistence.rationale_snapshots import build_rationale_type_snapshots
-from app.modules.simulation.analytics import (
+from app.modules.simulation.analytics.analytics import (
     add_personal_bot_percentile,
     calculate_action_contributions,
     calculate_benchmarks,
@@ -48,7 +48,7 @@ from app.modules.simulation.engine.strategies import (
 )
 from app.modules.simulation.models import Position
 from app.modules.simulation.persistence.repository import SimulationDataError, SimulationRepository
-from app.modules.simulation.comparator_details import (
+from app.modules.simulation.analytics.comparator_details import (
     RANDOM_MONTE_CARLO_RUN_COUNT,
     RANDOM_TRACE_SEED,
     build_comparators,

@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.report_analysis import _build_divergence_review
+from app.modules.simulation.analytics.report_analysis import _build_divergence_review
 
 
 class DivergenceScoringTests(unittest.TestCase):

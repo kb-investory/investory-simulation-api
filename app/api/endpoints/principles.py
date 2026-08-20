@@ -71,7 +71,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
         get_db_connection,
         load_simulation_from_db_by_id,
     )
-    from app.modules.simulation.report_analysis import REPORT_IDENTITY
+    from app.modules.simulation.analytics.report_analysis import REPORT_IDENTITY
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}

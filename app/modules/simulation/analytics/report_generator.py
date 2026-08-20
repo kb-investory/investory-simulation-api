@@ -15,8 +15,8 @@ from typing import List, Optional
 
 from app.modules.simulation.llm_client import call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
-from app.modules.simulation.report_analysis import REPORT_IDENTITY, DeterministicReportAnalyzer
-from app.modules.simulation.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
+from app.modules.simulation.analytics.report_analysis import REPORT_IDENTITY, DeterministicReportAnalyzer
+from app.modules.simulation.analytics.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
 from app.config import settings
 
 logger = logging.getLogger(__name__)
