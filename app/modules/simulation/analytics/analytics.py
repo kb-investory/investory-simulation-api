@@ -7,10 +7,10 @@ from dataclasses import asdict
 from math import floor
 from typing import Dict, Iterable, List, Optional
 
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import OrderAudit
-from app.modules.simulation.strategies import RandomBotStrategy
-from app.modules.simulation.evaluator import StockEvaluator
+from app.modules.simulation.engine.strategies import RandomBotStrategy
+from app.modules.simulation.engine.evaluator import StockEvaluator
 
 
 def _quantile(sorted_values: List[float], probability: float) -> float:

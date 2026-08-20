@@ -3,9 +3,9 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.api.v1.endpoints.simulation import calculate_initial_capital
-from app.modules.simulation.capital_calculator import InitialCapitalCalculator
-from app.modules.simulation.repository import SimulationDataError
+from app.api.endpoints.simulation import calculate_initial_capital
+from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
+from app.modules.simulation.persistence.repository import SimulationDataError
 
 
 class FakeRepository:
@@ -43,10 +43,10 @@ class InitialCapitalSelectionTests(unittest.TestCase):
 
     def test_endpoint_accepts_camel_case_query_names(self):
         with patch(
-            "app.api.v1.endpoints.simulation.SimulationRepository.resolve_account_id",
+            "app.api.endpoints.simulation.SimulationRepository.resolve_account_id",
             return_value=21,
         ), patch(
-            "app.api.v1.endpoints.simulation.InitialCapitalCalculator.calculate",
+            "app.api.endpoints.simulation.InitialCapitalCalculator.calculate",
             return_value={"snapshotDate": "2026-07-14"},
         ) as calculate:
             result = calculate_initial_capital(

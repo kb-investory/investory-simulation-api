@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 from fastapi import BackgroundTasks
 
-from app.api.v1.endpoints import simulation
-from app.modules.simulation.report_generator import SimulationReportGenerator
+from app.api.endpoints import simulation
+from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
 
 
 class SimulationReportAsyncTests(unittest.TestCase):

@@ -1,0 +1,10 @@
+services:
+  api:
+    build: .
+    image: ${IMAGE:-ghcr.io/kb-investory/investory-simulation-api:latest}
+    container_name: investory-simulation-api
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8000}:8000"
+    restart: unless-stopped

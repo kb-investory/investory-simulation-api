@@ -1,7 +1,7 @@
 import unittest
 
-from app.modules.simulation.rule_schema import InvestmentBotStrategySchema
-from app.modules.simulation.strengthen_spec import (
+from app.modules.simulation.rules.rule_schema import InvestmentBotStrategySchema
+from app.modules.simulation.rules.strengthen_spec import (
     RULE_STRENGTHEN_SPEC,
     build_strengthen_proposal,
     format_value,

@@ -16,9 +16,9 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import Position
-from app.modules.simulation.strategies import ActualUserStrategy
+from app.modules.simulation.engine.strategies import ActualUserStrategy
 
 logger = logging.getLogger(__name__)
 

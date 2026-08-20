@@ -3,8 +3,8 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import BackgroundTasks
 
-from app.api.v1.endpoints.simulation import run_simulation
-from app.api.v1.endpoints.simulation_helpers import SimulationRunRequest
+from app.api.endpoints.simulation import run_simulation
+from app.api.endpoints.simulation_helpers import SimulationRunRequest
 
 
 RULE_SCHEMA = {
@@ -28,11 +28,11 @@ RULE_SCHEMA = {
 
 
 class SimulationUsesCompiledBotTests(unittest.TestCase):
-    @patch("app.api.v1.endpoints.simulation.reserve_simulation_run_to_db", return_value=99)
-    @patch("app.api.v1.endpoints.simulation.find_existing_simulation_from_db", return_value=None)
-    @patch("app.api.v1.endpoints.simulation.MarketIndexCollector.ensure_period", return_value={"status": "DB_HIT"})
-    @patch("app.api.v1.endpoints.simulation.AIRuleCompiler.compile", side_effect=AssertionError("LLM compiler must not run"))
-    @patch("app.api.v1.endpoints.simulation.SimulationRepository")
+    @patch("app.api.endpoints.simulation_run_service.reserve_simulation_run_to_db", return_value=99)
+    @patch("app.api.endpoints.simulation_run_service.find_existing_simulation_from_db", return_value=None)
+    @patch("app.api.endpoints.simulation_run_service.MarketIndexCollector.ensure_period", return_value={"status": "DB_HIT"})
+    @patch("app.api.endpoints.simulation.AIRuleCompiler.compile", side_effect=AssertionError("LLM compiler must not run"))
+    @patch("app.api.endpoints.simulation_run_service.SimulationRepository")
     def test_run_loads_persisted_rule_schema_without_llm(
         self,
         repository_class,

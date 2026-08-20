@@ -1,14 +1,14 @@
 import unittest
 
-from app.modules.simulation.analytics import (
+from app.modules.simulation.analytics.analytics import (
     add_personal_bot_percentile,
     calculate_action_contributions,
     calculate_benchmarks,
     run_random_monte_carlo,
 )
-from app.modules.simulation.backtest import BacktestEngine
+from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import Position
-from app.modules.simulation.strategies import ActualUserStrategy, BaseStrategy
+from app.modules.simulation.engine.strategies import ActualUserStrategy, BaseStrategy
 
 
 class HoldStrategy(BaseStrategy):

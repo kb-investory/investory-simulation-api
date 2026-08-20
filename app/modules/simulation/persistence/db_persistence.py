@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import pymysql
 from app.config import settings
-from app.modules.simulation.rationale_snapshots import apply_rationale_type_snapshots
+from app.modules.simulation.persistence.rationale_snapshots import apply_rationale_type_snapshots
 
 VARIANT_TYPE_TO_API_ID = {
     "ACTUAL_USER": 1,

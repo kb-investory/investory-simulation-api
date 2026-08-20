@@ -3,9 +3,9 @@
 [API Endpoint Router] principles.py
 ================================================================================
 ■ 엔드포인트:
-  - POST /api/v1/principles/proposals/accept : 검증된 기존 원칙 강화안 적용
-  - GET  /api/v1/principles/recommendations : 성향 및 시뮬레이션 복기 기반 추천 원칙 목록 조회
-  - POST /api/v1/principles                 : 추천된/사용자정의 원칙을 실제 사용자 활성 원칙으로 저장
+  - POST /api/principles/proposals/accept : 검증된 기존 원칙 강화안 적용
+  - GET  /api/principles/recommendations : 성향 및 시뮬레이션 복기 기반 추천 원칙 목록 조회
+  - POST /api/principles                 : 추천된/사용자정의 원칙을 실제 사용자 활성 원칙으로 저장
 ================================================================================
 """
 
@@ -67,11 +67,11 @@ def _merge_rule_json(base: dict, patch: dict) -> dict:
 @router.post("/principles/proposals/accept", summary="원칙 평가 강화안 적용")
 def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
     """Apply only a server-stored and validated V3 proposal to the active principle set."""
-    from app.modules.simulation.db_persistence import (
+    from app.modules.simulation.persistence.db_persistence import (
         get_db_connection,
         load_simulation_from_db_by_id,
     )
-    from app.modules.simulation.report_analysis import REPORT_IDENTITY
+    from app.modules.simulation.analytics.report_analysis import REPORT_IDENTITY
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
@@ -299,7 +299,7 @@ def get_recommended_principles():
     - MySQL DB 기반으로 사용자의 원칙 및 추천 원칙 목록을 조회합니다.
     """
     try:
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
         conn = get_db_connection()
         recommendations = []
         with conn.cursor() as cur:

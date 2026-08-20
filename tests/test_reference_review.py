@@ -1,7 +1,7 @@
 import unittest
 
-from app.modules.simulation.report_analysis import _build_reference_review
-from app.modules.simulation.strategy_catalog import VALUE_QUALITY_STRATEGY
+from app.modules.simulation.analytics.report_analysis import _build_reference_review
+from app.modules.simulation.engine.strategy_catalog import VALUE_QUALITY_STRATEGY
 
 
 def _participants(strategy_return=15.0):

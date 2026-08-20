@@ -13,7 +13,7 @@ from collections import defaultdict, deque
 from datetime import date, datetime, timedelta
 from typing import Callable, Dict, List, Optional
 
-from app.modules.simulation.db_persistence import get_db_connection
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 logger = logging.getLogger(__name__)
 

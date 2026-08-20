@@ -1,13 +1,13 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from app.api.v1.endpoints.simulation import compile_simulation_bot
-from app.api.v1.endpoints.simulation_helpers import RuleCompileRequest
+from app.api.endpoints.simulation import compile_simulation_bot
+from app.api.endpoints.simulation_helpers import RuleCompileRequest
 
 
 class CompiledBotIdempotencyTests(unittest.TestCase):
-    @patch("app.api.v1.endpoints.simulation.SimulationRepository")
-    @patch("app.api.v1.endpoints.simulation.AIRuleCompiler.compile", side_effect=AssertionError("OpenAI must not run"))
+    @patch("app.api.endpoints.simulation.SimulationRepository")
+    @patch("app.api.endpoints.simulation.AIRuleCompiler.compile", side_effect=AssertionError("OpenAI must not run"))
     def test_same_compilation_input_reuses_existing_bot(self, compile_call, repository_class):
         repository = MagicMock()
         repository_class.return_value = repository

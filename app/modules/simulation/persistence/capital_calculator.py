@@ -11,7 +11,7 @@
 from datetime import date
 from typing import Dict, Optional
 
-from app.modules.simulation.repository import SimulationDataError, SimulationRepository
+from app.modules.simulation.persistence.repository import SimulationDataError, SimulationRepository
 
 class InitialCapitalCalculator:
     """ERD holding_snapshots 기반 시뮬레이션 초기 자금 자동 계산기 클래스"""

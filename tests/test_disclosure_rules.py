@@ -2,7 +2,7 @@ import unittest
 import os
 from unittest.mock import patch
 
-from app.modules.simulation.dart_collector import DartCollector, DisclosureAnalysisError
+from app.modules.simulation.collectors.dart_collector import DartCollector, DisclosureAnalysisError
 
 
 class DisclosureRuleTests(unittest.TestCase):

@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
+from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
 
 
 PROFILE = {
@@ -88,7 +88,7 @@ class LLMRuleCompilerTests(unittest.TestCase):
                 compiler.compile(["원칙"], PROFILE, [])
         self.assertEqual(context.exception.code, "LLM_CONFIGURATION_REQUIRED")
 
-    @patch("app.modules.simulation.compiler.urlopen", return_value=FakeResponse())
+    @patch("app.modules.simulation.llm_client.urlopen", return_value=FakeResponse())
     def test_valid_llm_response_is_used_and_records_no_fallback(self, mocked_urlopen):
         compiler = AIRuleCompiler(api_key="sk-test-valid-key")
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):

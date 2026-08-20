@@ -16,6 +16,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 from typing import Dict, List, Optional
+from app.modules.simulation.llm_client import call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_DISCLOSURE_PROMPT, build_user_disclosure_prompt
 from app.config import settings
 
@@ -40,18 +41,15 @@ class DartCollector:
             print(f"[DartCollector Guard] 최대 LLM 호출 수({self.max_llm_calls}회) 도달. 룰 엔진으로 안전 전환합니다.")
             return None
 
+        self._llm_call_count += 1
         try:
-            import urllib.request
             prompt = build_user_disclosure_prompt(report_name, contract_ratio, content_summary)
-            model_name = self.model
-            
-            payload = json.dumps({
-                "model": model_name,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_DISCLOSURE_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
-                "response_format": {
+            data = call_openai_chat_json(
+                api_key=openai_key,
+                model=self.model,
+                system_prompt=SYSTEM_DISCLOSURE_PROMPT,
+                user_prompt=prompt,
+                response_format={
                     "type": "json_schema",
                     "json_schema": {
                         "name": "disclosure_impact",
@@ -67,33 +65,18 @@ class DartCollector:
                             },
                         },
                     },
-                }
-            }).encode("utf-8")
-
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/chat/completions",
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {openai_key}"
-                }
+                },
+                timeout=settings.LLM_TIMEOUT,
             )
-
-            with urllib.request.urlopen(req, timeout=settings.LLM_TIMEOUT) as resp:
-
-                self._llm_call_count += 1
-                result = json.loads(resp.read().decode("utf-8"))
-                content = result["choices"][0]["message"]["content"]
-                data = json.loads(content)
-                direction = data["direction"]
-                impact_score = float(data["impactScore"])
-                if direction not in {"POSITIVE", "NEGATIVE", "NEUTRAL"} or not 0 <= impact_score <= 100:
-                    raise ValueError("공시 LLM 응답 값이 허용 범위를 벗어났습니다.")
-                return {
-                    "direction": direction,
-                    "impactScore": impact_score,
-                    "reason": f"[OpenAI GPT AI 심층분석] {data['reason']}"
-                }
+            direction = data["direction"]
+            impact_score = float(data["impactScore"])
+            if direction not in {"POSITIVE", "NEGATIVE", "NEUTRAL"} or not 0 <= impact_score <= 100:
+                raise ValueError("공시 LLM 응답 값이 허용 범위를 벗어났습니다.")
+            return {
+                "direction": direction,
+                "impactScore": impact_score,
+                "reason": f"[OpenAI GPT AI 심층분석] {data['reason']}"
+            }
         except Exception as e:
             print(f"[DartCollector Warning] OpenAI GPT LLM 공시 분석 실패: {e}")
 
@@ -257,7 +240,7 @@ class DartCollector:
     ) -> dict:
         """Backfill disclosures for DB securities over a simulation period."""
 
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
 
         corp_code_map = self.load_corp_code_map()
         conn = get_db_connection()
@@ -320,7 +303,7 @@ class DartCollector:
         }
 
     def _save_disclosure_items(self, items: List[dict], allow_llm: bool) -> int:
-        from app.modules.simulation.db_persistence import get_db_connection
+        from app.modules.simulation.persistence.db_persistence import get_db_connection
 
         conn = get_db_connection()
         saved_count = 0

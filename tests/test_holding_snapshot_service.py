@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.holding_snapshot_service import (
+from app.modules.simulation.persistence.holding_snapshot_service import (
     SnapshotReconstructionError,
     reconstruct_holding_snapshots,
     reconstruct_holding_snapshots_forward,

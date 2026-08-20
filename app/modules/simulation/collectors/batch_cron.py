@@ -11,8 +11,8 @@
 import threading
 import datetime
 from zoneinfo import ZoneInfo
-from app.modules.simulation.dart_collector import DartCollector
-from app.modules.simulation.fundamentals_collector import FundamentalsCollector
+from app.modules.simulation.collectors.dart_collector import DartCollector
+from app.modules.simulation.collectors.fundamentals_collector import FundamentalsCollector
 
 _scheduler_thread = None
 _stop_event = threading.Event()

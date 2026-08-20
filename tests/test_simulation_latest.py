@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from app.api.v1.endpoints.simulation import get_latest_simulation
-from app.api.v1.endpoints.simulation_helpers import SIMULATION_RUN_CACHE
+from app.api.endpoints.simulation import get_latest_simulation
+from app.api.endpoints.simulation_helpers import SIMULATION_RUN_CACHE
 
 
 class LatestSimulationTests(unittest.TestCase):
@@ -15,9 +15,9 @@ class LatestSimulationTests(unittest.TestCase):
     def tearDown(self):
         SIMULATION_RUN_CACHE.clear()
 
-    @patch("app.api.v1.endpoints.simulation.get_simulation_detail")
+    @patch("app.api.endpoints.simulation.get_simulation_detail")
     @patch(
-        "app.api.v1.endpoints.simulation.get_latest_completed_simulation_id_from_db",
+        "app.api.endpoints.simulation.get_latest_completed_simulation_id_from_db",
         return_value=20,
     )
     def test_latest_ignores_newer_incomplete_run(self, latest_id, get_detail):
@@ -30,7 +30,7 @@ class LatestSimulationTests(unittest.TestCase):
         self.assertEqual(response["simulationRun"]["simulationRunId"], 20)
 
     @patch(
-        "app.api.v1.endpoints.simulation.get_latest_completed_simulation_id_from_db",
+        "app.api.endpoints.simulation.get_latest_completed_simulation_id_from_db",
         return_value=None,
     )
     def test_latest_returns_404_when_no_completed_result_exists(self, latest_id):

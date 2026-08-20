@@ -6,10 +6,10 @@ from collections import defaultdict
 from datetime import date as date_type
 from typing import Dict, List, Optional
 
-from app.modules.simulation.evaluator import StockEvaluator
-from app.modules.simulation.rule_schema import SelectionRule
-from app.modules.simulation.strengthen_spec import build_strengthen_proposal
-from app.modules.simulation.strategy_catalog import (
+from app.modules.simulation.engine.evaluator import StockEvaluator
+from app.modules.simulation.rules.rule_schema import SelectionRule
+from app.modules.simulation.rules.strengthen_spec import build_strengthen_proposal
+from app.modules.simulation.engine.strategy_catalog import (
     VALUE_QUALITY_REFERENCE_PRINCIPLES,
     VALUE_QUALITY_STRATEGY,
 )

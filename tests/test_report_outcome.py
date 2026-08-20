@@ -1,6 +1,6 @@
 import unittest
 
-from app.modules.simulation.report_analysis import _build_outcome, _outcome_branch
+from app.modules.simulation.analytics.report_analysis import _build_outcome, _outcome_branch
 
 
 def _ranked(**returns_by_type):
@@ -145,7 +145,7 @@ class OutcomePayloadTests(unittest.TestCase):
         self.assertEqual(outcome["branch"], "INCONCLUSIVE")
 
     def test_every_branch_has_copy_and_a_focus_section(self):
-        from app.modules.simulation.report_analysis import OUTCOME_COPY
+        from app.modules.simulation.analytics.report_analysis import OUTCOME_COPY
 
         for branch, (headline, detail, focus) in OUTCOME_COPY.items():
             with self.subTest(branch=branch):
@@ -165,7 +165,7 @@ class MarketLuckContextTests(unittest.TestCase):
     """원숭이봇이 1위인 회차는 분포로 설명한다."""
 
     def _context(self, distribution_percent, actual=3.0):
-        from app.modules.simulation.report_analysis import _build_performance_context
+        from app.modules.simulation.analytics.report_analysis import _build_performance_context
         analytics = {
             "randomDistribution": {
                 "runCount": len(distribution_percent),
@@ -205,6 +205,6 @@ class MarketLuckContextTests(unittest.TestCase):
             self.assertIsNotNone(luck[key], key)
 
     def test_the_market_luck_branch_looks_at_the_distribution_not_the_coverage(self):
-        from app.modules.simulation.report_analysis import OUTCOME_COPY
+        from app.modules.simulation.analytics.report_analysis import OUTCOME_COPY
 
         self.assertEqual(OUTCOME_COPY["MARKET_LUCK"][2], "PERFORMANCE_CONTEXT")

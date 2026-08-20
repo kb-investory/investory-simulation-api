@@ -1,9 +1,9 @@
 import unittest
 
-from app.modules.simulation.backtest import BacktestEngine
-from app.modules.simulation.counterfactual import build_principle_counterfactuals
+from app.modules.simulation.engine.backtest import BacktestEngine
+from app.modules.simulation.analytics.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.models import Position
-from app.modules.simulation.strategies import ActualUserStrategy
+from app.modules.simulation.engine.strategies import ActualUserStrategy
 
 
 def _price_row(security_id, price_date, close_price, open_price=None, day5_return=0.0):

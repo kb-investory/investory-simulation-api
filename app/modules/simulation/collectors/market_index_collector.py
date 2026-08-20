@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Iterable, List, Optional
 
 from app.config import settings
-from app.modules.simulation.db_persistence import get_db_connection
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 
 INDEX_ENDPOINTS = {

@@ -5,8 +5,8 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from app.api.error_responses import internal_server_error
-from app.api.v1.endpoints import principles, simulation
-from app.api.v1.endpoints.simulation_helpers import SimulationRunRequest
+from app.api.endpoints import principles, simulation
+from app.api.endpoints.simulation_helpers import SimulationRunRequest
 
 
 SECRET_ERROR = "mysql://admin:secret@internal-db:3306 SQL syntax near customer_ssn"
@@ -37,7 +37,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
         self.assert_safe_500(response_error, "SAFE_TEST_ERROR")
         self.assertIn(SECRET_ERROR, "\n".join(captured.output))
 
-    @patch("app.api.v1.endpoints.simulation.InitialCapitalCalculator.calculate")
+    @patch("app.api.endpoints.simulation.InitialCapitalCalculator.calculate")
     def test_initial_capital_endpoint_does_not_expose_internal_exception(self, calculate):
         calculate.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(simulation.logger, level="ERROR"):
@@ -45,7 +45,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
                 simulation.calculate_initial_capital("2026-01-01", 21)
         self.assert_safe_500(raised.exception, "INITIAL_CAPITAL_INTERNAL_ERROR")
 
-    @patch("app.api.v1.endpoints.simulation.SimulationRepository.load_initial_snapshot")
+    @patch("app.api.endpoints.simulation.SimulationRepository.load_initial_snapshot")
     def test_simulation_run_endpoint_does_not_expose_db_exception(self, load_snapshot):
         load_snapshot.side_effect = RuntimeError(SECRET_ERROR)
         request = SimulationRunRequest(periodStart="2026-01-01", periodEnd="2026-02-01")
@@ -54,7 +54,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
                 simulation.run_simulation(request)
         self.assert_safe_500(raised.exception, "SIMULATION_RUN_INTERNAL_ERROR")
 
-    @patch("app.modules.simulation.db_persistence.get_db_connection")
+    @patch("app.modules.simulation.persistence.db_persistence.get_db_connection")
     def test_principles_endpoint_does_not_expose_db_exception(self, get_connection):
         get_connection.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(principles.logger, level="ERROR"):

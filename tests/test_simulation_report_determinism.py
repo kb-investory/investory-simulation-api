@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from app.modules.simulation.report_analysis import DeterministicReportAnalyzer
-from app.modules.simulation.report_generator import SimulationReportGenerator
+from app.modules.simulation.analytics.report_analysis import DeterministicReportAnalyzer
+from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
 
 
 class SimulationReportDeterminismTests(unittest.TestCase):
@@ -873,8 +873,8 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             "verificationStatus": "COMPLETED",
         }
         with (
-            patch("app.modules.simulation.report_generator.EvidenceSearchAgent.search", return_value=dossier) as search,
-            patch("app.modules.simulation.report_generator.EvidenceJudgmentAgent.judge", return_value=judgment) as judge,
+            patch("app.modules.simulation.analytics.report_generator.EvidenceSearchAgent.search", return_value=dossier) as search,
+            patch("app.modules.simulation.analytics.report_generator.EvidenceJudgmentAgent.judge", return_value=judgment) as judge,
         ):
             result = generator._call_web_thesis_verifier(review)
 

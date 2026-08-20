@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from app.modules.simulation.security_price_collector import SecurityPriceCollector
+from app.modules.simulation.collectors.security_price_collector import SecurityPriceCollector
 
 
 class SecurityPriceCollectorTests(unittest.TestCase):

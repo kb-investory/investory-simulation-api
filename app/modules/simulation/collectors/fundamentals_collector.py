@@ -10,8 +10,8 @@ import urllib.request
 from typing import Dict, Iterable, List, Optional, Sequence
 
 from app.config import settings
-from app.modules.simulation.dart_collector import DartCollector
-from app.modules.simulation.db_persistence import get_db_connection
+from app.modules.simulation.collectors.dart_collector import DartCollector
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 
 REPORT_CODES = {

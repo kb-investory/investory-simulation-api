@@ -2,7 +2,7 @@ import datetime
 import unittest
 from zoneinfo import ZoneInfo
 
-from app.modules.simulation.batch_cron import seconds_until_next_run
+from app.modules.simulation.collectors.batch_cron import seconds_until_next_run
 
 
 class BatchSchedulerTests(unittest.TestCase):
