@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
+from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
 
 
 PROFILE = {

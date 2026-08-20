@@ -193,7 +193,7 @@ class StatedRuleVerificationTests(unittest.TestCase):
     """stated 라고 주장했다고 그대로 믿지 않는다."""
 
     def _verify(self, text, claimed, mapped):
-        from app.modules.simulation.compiler import AIRuleCompiler
+        from app.modules.simulation.rules.compiler import AIRuleCompiler
         return AIRuleCompiler._verified_stated_rules(
             {"user_natural_text": text, "stated_rules": claimed}, mapped
         )

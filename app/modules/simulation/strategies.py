@@ -12,7 +12,7 @@ from datetime import date
 from typing import Dict, List, Optional
 from app.modules.simulation.models import Portfolio, VirtualOrder
 from app.modules.simulation.evaluator import StockEvaluator
-from app.modules.simulation.rule_schema import SelectionRule
+from app.modules.simulation.rules.rule_schema import SelectionRule
 from app.modules.simulation.strategy_catalog import VALUE_QUALITY_STRATEGY
 
 

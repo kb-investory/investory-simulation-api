@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from app.config import settings
 from app.modules.simulation.llm_client import LLMRequestError, call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_COMPILER_PROMPT, build_user_compiler_prompt
-from app.modules.simulation.rule_schema import (
+from app.modules.simulation.rules.rule_schema import (
     InvestmentBotStrategySchema,
     executable_rule_paths,
     numeric_rule_paths,

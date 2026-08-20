@@ -25,10 +25,10 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.api.error_responses import internal_server_error
 
-from app.modules.simulation.compiler import AIRuleCompiler, RuleCompilationError
+from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.backtest import BacktestEngine
 from app.modules.simulation.counterfactual import build_principle_counterfactuals
-from app.modules.simulation.strengthen_spec import RULE_STRENGTHEN_SPEC
+from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.report_generator import SimulationReportGenerator
 from app.modules.simulation.persistence.rationale_snapshots import build_rationale_type_snapshots

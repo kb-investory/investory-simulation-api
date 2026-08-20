@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Optional, Sequence
 
-from app.modules.simulation.rule_schema import SelectionRule
+from app.modules.simulation.rules.rule_schema import SelectionRule
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:

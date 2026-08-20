@@ -2,7 +2,7 @@ import unittest
 
 from app.modules.simulation.evaluator import StockEvaluator
 from app.modules.simulation.backtest import BacktestEngine
-from app.modules.simulation.rule_schema import SelectionRule
+from app.modules.simulation.rules.rule_schema import SelectionRule
 from app.modules.simulation.models import Portfolio, Position
 from app.modules.simulation.strategies import FamousStrategyBot, PersonalBotStrategy
 

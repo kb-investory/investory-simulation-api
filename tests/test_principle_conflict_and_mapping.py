@@ -1,8 +1,8 @@
 import unittest
 
-from app.modules.simulation.compiler import AIRuleCompiler
+from app.modules.simulation.rules.compiler import AIRuleCompiler
 from app.modules.simulation.report_analysis import DeterministicReportAnalyzer
-from app.modules.simulation.rule_schema import (
+from app.modules.simulation.rules.rule_schema import (
     InvestmentBotStrategySchema,
     executable_rule_paths,
 )
