@@ -71,21 +71,18 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
         get_db_connection,
         load_simulation_from_db_by_id,
     )
+    from app.modules.simulation.report_analysis import REPORT_IDENTITY
 
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
-    if report.get("reportVersion") not in {"DETERMINISTIC_V10", "DETERMINISTIC_V11", "DETERMINISTIC_V12", "DETERMINISTIC_V13"}:
+    if report.get("reportVersion") != REPORT_IDENTITY:
         raise HTTPException(status_code=409, detail="새 분석 버전의 리포트를 먼저 조회해 주세요.")
     evaluation_suggestions = [
         item.get("suggestion")
         for item in report.get("principleEvaluations", [])
         if isinstance(item, dict) and isinstance(item.get("suggestion"), dict)
     ]
-    proposals = (
-        report.get("principleDiscoveries", [])
-        + report.get("principleReinforcements", [])
-        + evaluation_suggestions
-    )
+    proposals = report.get("principleReinforcements", []) + evaluation_suggestions
     if req.evaluationId is None and req.recommendationId is None:
         raise HTTPException(status_code=422, detail="evaluationId 또는 recommendationId가 필요합니다.")
     proposal = None

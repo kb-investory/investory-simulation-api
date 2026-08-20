@@ -17,6 +17,9 @@ from app.modules.simulation.strategy_catalog import (
 
 ACTUAL_VARIANT_IDS = {1, 1001}
 
+# 리포트 형태의 식별자. 버전 사다리가 아니라 "이 형태인지"만 구분합니다.
+REPORT_IDENTITY = "DETERMINISTIC"
+
 # A principle needs this many assessed trades before "no problem found" is an
 # honest conclusion. Below it the verdict says the evidence is still thin
 # instead of clearing the principle.
@@ -309,8 +312,6 @@ def _principle_feedback(judgment: str, principle: Optional[dict], bot_action: st
         return f"'{title}' 원칙에 맞게 행동했어요. 정한 원칙을 제대로 지켰습니다."
     if judgment == "VIOLATED":
         return f"'{title}' 원칙대로라면 이 시점에는 {bot_action} 판단을 먼저 따랐어야 해요."
-    if judgment == "DECISION_DIFFERENCE":
-        return "명시적인 사용자 원칙 위반은 확인되지 않았지만 개인 원칙봇과 다른 판단을 했어요."
     if judgment == "INSUFFICIENT_DATA":
         return "원칙 준수 여부를 판단할 데이터가 부족합니다."
     return "이 거래에 직접 연결할 수 있는 명시적인 사용자 원칙이 없습니다."
@@ -742,6 +743,128 @@ def _build_principle_evaluations(
         })
 
     return evaluations, reinforcements
+
+
+def _rank_participants(participant_summary: List[dict], simulated_trades: List[dict]) -> List[dict]:
+    """Order the run's participants by return, best first."""
+    trade_counts: Dict[int, int] = defaultdict(int)
+    for trade in simulated_trades:
+        trade_counts[_variant_id(trade)] += 1
+    ranked = sorted(
+        (
+            {
+                "variantId": int(item.get("variantId") or 0),
+                "variantType": str(item.get("variantType") or ""),
+                "variantName": item.get("variantName"),
+                "cumulativeReturnPercent": round(float(item.get("cumulativeReturnPercent") or 0.0), 2),
+                "mddPercent": round(float(item.get("mddPercent") or 0.0), 2),
+                "tradeCount": trade_counts.get(int(item.get("variantId") or 0), 0),
+            }
+            for item in participant_summary
+        ),
+        key=lambda item: item["cumulativeReturnPercent"],
+        reverse=True,
+    )
+    for position, item in enumerate(ranked, 1):
+        item["rank"] = position
+    return ranked
+
+
+def _outcome_branch(ranked: List[dict], review_summary: dict) -> str:
+    """Pick the one story this run has to tell.
+
+    Rank alone decides which participant the report talks about, but it never
+    decides whether the user is praised: a first place reached while breaking
+    the user's own rules is luck, and saying otherwise would undo the whole
+    point of judging process separately from outcome.
+    """
+    by_type = {item["variantType"]: item for item in ranked}
+    personal = by_type.get("PERSONAL_BOT")
+    if not ranked or (personal is not None and personal["tradeCount"] == 0):
+        # A bot that never traded has a 0% line, not a comparable result.
+        return "INCONCLUSIVE"
+
+    winner = ranked[0]["variantType"]
+    if winner == "RANDOM_BOT":
+        return "MARKET_LUCK"
+    if winner == "ACTUAL_USER":
+        if review_summary.get("violatedCount", 0) >= 2:
+            return "USER_AHEAD_LUCKY"
+        return "USER_AHEAD_DISCIPLINED"
+    if winner == "PERSONAL_BOT":
+        return "BOT_AHEAD"
+    return "REFERENCE_AHEAD"
+
+
+OUTCOME_COPY = {
+    "INCONCLUSIVE": (
+        "이번 회차는 비교할 수 없습니다",
+        "원칙봇이 한 건도 매매하지 않아 순위를 견줄 수 없습니다. 원칙과 종목 데이터를 확인해 주세요.",
+        "COVERAGE",
+    ),
+    "MARKET_LUCK": (
+        "이 기간엔 아무렇게나 사도 벌었습니다",
+        "무작위 매매가 1위였습니다. 이번 회차 수익률로는 원칙의 좋고 나쁨을 판단하지 마세요.",
+        "COVERAGE",
+    ),
+    "USER_AHEAD_DISCIPLINED": (
+        "결과도 좋았고, 원칙도 지켰습니다",
+        "직접 한 매매가 1위였고 원칙을 어긴 거래도 반복되지 않았습니다. 지금 방식을 유지할 근거가 있습니다.",
+        "PRINCIPLE_EVALUATIONS",
+    ),
+    "USER_AHEAD_LUCKY": (
+        "1위였지만, 원칙을 지켜서 얻은 결과는 아닙니다",
+        "직접 한 매매가 1위였습니다. 다만 스스로 정한 기준을 반복해서 넘겼기 때문에 같은 방식이 반복되면 결과는 달라질 수 있습니다.",
+        "PRINCIPLE_EVALUATIONS",
+    ),
+    "BOT_AHEAD": (
+        "원칙을 그대로 지킨 쪽이 앞섰습니다",
+        "당신의 원칙만 따라 매매한 결과가 실제 매매보다 좋았습니다. 어디서 갈라졌는지 거래 단위로 확인해 보세요.",
+        "DIVERGENCE",
+    ),
+    "REFERENCE_AHEAD": (
+        "비교 전략이 앞선 기간입니다",
+        "이 전략은 당신 원칙에 없는 기준을 사용합니다. 수익률이 아니라 그 기준이 무엇인지를 보세요.",
+        "REFERENCE_PRINCIPLES",
+    ),
+}
+
+
+def _build_outcome(
+    participant_summary: List[dict],
+    simulated_trades: List[dict],
+    review_summary: dict,
+    coverage: dict,
+) -> dict:
+    """The report's spine: one ranked answer, and where to look next."""
+    ranked = _rank_participants(participant_summary, simulated_trades)
+    branch = _outcome_branch(ranked, review_summary)
+    headline, detail, focus = OUTCOME_COPY[branch]
+    actual = next((item for item in ranked if item["variantType"] == "ACTUAL_USER"), None)
+    personal = next((item for item in ranked if item["variantType"] == "PERSONAL_BOT"), None)
+    gap = (
+        round(personal["cumulativeReturnPercent"] - actual["cumulativeReturnPercent"], 2)
+        if actual and personal
+        else None
+    )
+    return {
+        "branch": branch,
+        "headline": headline,
+        "detail": detail,
+        "focusSection": focus,
+        "winnerVariantType": ranked[0]["variantType"] if ranked else None,
+        "ranking": ranked,
+        "evidence": {
+            "actualReturnPercent": actual["cumulativeReturnPercent"] if actual else None,
+            "principleBotReturnPercent": personal["cumulativeReturnPercent"] if personal else None,
+            "principleBotGapPercentPoint": gap,
+            "assessedTradeCount": review_summary.get("assessedTradeCount", 0),
+            "violatedTradeCount": review_summary.get("violatedCount", 0),
+            "uncoveredTradeCount": coverage.get("uncoveredTradeCount", 0),
+            "totalTradeCount": review_summary.get("totalTradeCount", 0),
+        },
+        "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
+    }
 
 
 def _build_principle_set_diagnostics(
@@ -1496,10 +1619,10 @@ def _principle_review(
             "targetRule": config["targetRule"],
         }
     return {
-        "status": "DECISION_DIFFERENCE",
+        "status": "NOT_COVERED",
         "violatedPrinciple": None,
-        "violationReason": "\uba85\uc2dc\uc801 \uc6d0\uce59 \uc704\ubc18\uc740 \ud655\uc778\ub418\uc9c0 \uc54a\uc558\uc9c0\ub9cc, \uc6d0\uce59\ubd07\uacfc \ub2e4\ub978 \ud310\ub2e8\uc774 \uc788\uc5c8\uc2b5\ub2c8\ub2e4.",
-        "recommendedAction": _recommended_action(action, bot_action, None),
+        "violationReason": "\uc774 \uac70\ub798\uc5d0 \uc801\uc6a9\ud560 \uc218 \uc788\ub294 \uc6d0\uce59\uc774 \uc5c6\uc2b5\ub2c8\ub2e4.",
+        "recommendedAction": None,
         "targetRule": None,
     }
 
@@ -1643,8 +1766,6 @@ class DeterministicReportAnalyzer:
                     "expectedAction": selected_match.get("expectedAction"),
                 }
                 principle_judgment = selected_match["judgment"]
-            elif action != bot_action:
-                principle_judgment = "DECISION_DIFFERENCE"
             elif any(item["judgment"] == "INSUFFICIENT_DATA" for item in principle_matches):
                 principle_judgment = "INSUFFICIENT_DATA"
             else:
@@ -1796,7 +1917,6 @@ class DeterministicReportAnalyzer:
         principle_review_summary = {
             "followedCount": sum(item["principleJudgment"] == "FOLLOWED" for item in decision_reviews),
             "violatedCount": sum(item["principleJudgment"] == "VIOLATED" for item in decision_reviews),
-            "decisionDifferenceCount": sum(item["principleJudgment"] == "DECISION_DIFFERENCE" for item in decision_reviews),
             "unassessedCount": sum(item["principleJudgment"] in {"NOT_APPLICABLE", "INSUFFICIENT_DATA"} for item in decision_reviews),
             "assessedTradeCount": sum(item["principleJudgment"] in {"FOLLOWED", "VIOLATED"} for item in decision_reviews),
             "totalTradeCount": len(decision_reviews),
@@ -1863,8 +1983,16 @@ class DeterministicReportAnalyzer:
             participant_summary,
         )
 
+        outcome = _build_outcome(
+            participant_summary,
+            simulated_trades,
+            principle_review_summary,
+            principle_set_diagnostics["coverage"],
+        )
+
         return {
-            "reportVersion": "DETERMINISTIC_V13",
+            "reportVersion": REPORT_IDENTITY,
+            "outcome": outcome,
             "principleReviewSummary": principle_review_summary,
             "decisionReviews": decision_reviews,
             "keyTradeReviews": key_trade_reviews,
@@ -1875,10 +2003,7 @@ class DeterministicReportAnalyzer:
             "principleEvaluations": principle_evaluations,
             "principleSetDiagnostics": principle_set_diagnostics,
             "performanceContext": performance_context,
-            "principleDiscoveries": [],
             "principleReinforcements": principle_reinforcements,
-            "recommendedPrinciples": principle_reinforcements,
-            "improvementActions": [],
             "referencePrinciples": reference_principles,
             "generationMetadata": {
                 "judgmentSource": "DETERMINISTIC_RULE_ENGINE",

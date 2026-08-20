@@ -83,9 +83,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         }
         return {
             "report_json": {
-                "reportVersion": "DETERMINISTIC_V10",
-                "principleDiscoveries": [proposal] if proposal_type == "DISCOVERY" else [],
-                "principleReinforcements": [proposal] if proposal_type == "REINFORCEMENT" else [],
+                "reportVersion": "DETERMINISTIC",
+                "principleReinforcements": [proposal],
             }
         }
 
@@ -146,7 +145,7 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         ])
         detail = {
             "report_json": {
-                "reportVersion": "DETERMINISTIC_V13",
+                "reportVersion": "DETERMINISTIC",
                 "principleEvaluations": [{
                     "evaluationId": "PE_9_entry_max_5day_return",
                     "principleSetItemId": 9,
@@ -185,7 +184,7 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         ])
         detail = {
             "report_json": {
-                "reportVersion": "DETERMINISTIC_V13",
+                "reportVersion": "DETERMINISTIC",
                 "principleEvaluations": [{
                     "evaluationId": "PE_9_entry_max_5day_return",
                     "principleSetItemId": 9,
