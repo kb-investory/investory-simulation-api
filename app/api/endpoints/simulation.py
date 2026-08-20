@@ -17,66 +17,38 @@ import uuid
 import asyncio
 import logging
 from copy import deepcopy
-from dataclasses import asdict
 from threading import Lock
-from time import perf_counter
 from typing import Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.api.error_responses import internal_server_error
 
 from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
-from app.modules.simulation.engine.backtest import BacktestEngine
-from app.modules.simulation.analytics.counterfactual import build_principle_counterfactuals
 from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
-from app.modules.simulation.persistence.rationale_snapshots import build_rationale_type_snapshots
-from app.modules.simulation.analytics.analytics import (
-    add_personal_bot_percentile,
-    calculate_action_contributions,
-    calculate_benchmarks,
-    calculate_security_contributions,
-    calculate_variant_metrics,
-    detect_behavior_patterns,
-    evaluate_actual_principle_compliance,
-    find_divergence_moments,
-    run_random_monte_carlo,
-)
-from app.modules.simulation.engine.strategies import (
-    ActualUserStrategy, PersonalBotStrategy, FamousStrategyBot, RandomBotStrategy
-)
-from app.modules.simulation.models import Position
+from app.modules.simulation.analytics.analytics import find_divergence_moments
 from app.modules.simulation.persistence.repository import SimulationDataError, SimulationRepository
 from app.modules.simulation.analytics.comparator_details import (
-    RANDOM_MONTE_CARLO_RUN_COUNT,
-    RANDOM_TRACE_SEED,
     build_comparators,
     build_personal_comparator,
 )
-from app.modules.simulation.collectors.market_index_collector import MarketIndexCollector
 from app.modules.simulation.persistence.db_persistence import (
-    save_simulation_run_to_db, get_simulation_history_from_db,
-    find_existing_simulation_from_db, load_simulation_from_db_by_id,
-    reserve_simulation_run_to_db, save_simulation_report_to_db,
+    get_simulation_history_from_db,
+    load_simulation_from_db_by_id,
+    save_simulation_report_to_db,
     get_latest_completed_simulation_id_from_db,
 )
 
 from app.api.endpoints.simulation_helpers import (
     RuleCompileRequest, RuleConfirmationRequest, SimulationRunRequest,
-    normalize_daily_snapshot, normalize_trade,
     SIMULATION_RUN_CACHE, TEST_USER_ID,
 )
+from app.api.endpoints.simulation_run_service import SimulationRunService
 
 router = APIRouter(tags=["Simulation & Rules"])
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PARTICIPANTS = {
-    "ACTUAL_USER": 1,
-    "PERSONAL_BOT": 2,
-    "FAMOUS_STRATEGY": 3,
-    "RANDOM_BOT": 4,
-}
 ANALYTICS_RESPONSE_FIELDS = (
     "orderAudits",
     "screeningAudits",
@@ -594,393 +566,13 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
     [대응 화면: y9DNLy]
     - 4개 대조군 봇의 독립 백테스트를 일별 이벤트 루프로 연산합니다.
     """
-    repository = None
-    request_started = perf_counter()
+    background_tasks = background_tasks or BackgroundTasks()
     try:
-        background_tasks = background_tasks or BackgroundTasks()
-        if not req.period_start or not req.period_end or req.period_start >= req.period_end:
-            raise SimulationDataError("INVALID_PERIOD", "시작일은 종료일보다 빨라야 합니다.")
-
-        participant_types = req.participant_types or list(SUPPORTED_PARTICIPANTS)
-        invalid_types = sorted(set(participant_types) - set(SUPPORTED_PARTICIPANTS))
-        if invalid_types:
-            raise SimulationDataError(
-                "INVALID_PARTICIPANT_TYPE",
-                "지원하지 않는 참가자 유형이 포함되어 있습니다.",
-                {"invalidTypes": invalid_types},
-            )
-
-        repository = SimulationRepository(reuse_connection=True)
-        account_id = repository.resolve_account_id(TEST_USER_ID, req.account_id)
-        initial_state = repository.load_initial_snapshot(account_id, req.period_start)
-        initial_capital = float(initial_state["initialCapital"])
-
-        compiled_bot = None
-        if "PERSONAL_BOT" in participant_types:
-            compiled_bot = repository.load_compiled_personal_bot(TEST_USER_ID, req.personal_bot_id)
-
-        cached_result = find_existing_simulation_from_db(
-            user_id=TEST_USER_ID,
-            period_start=req.period_start,
-            period_end=req.period_end,
-            initial_capital=initial_capital,
-            participant_types=participant_types,
-            personal_bot_id=compiled_bot["personalBotId"] if compiled_bot else None,
+        service = SimulationRunService(
+            req, background_tasks,
+            schedule_report_enrichment=_schedule_report_enrichment,
         )
-        if cached_result and isinstance(cached_result.get("positionSnapshots"), list):
-            cached_result["accountId"] = account_id
-            cached_result["dataSource"] = "MYSQL"
-            cached_result["usesMockData"] = False
-            cached_result["executionTimingMs"] = {
-                "cacheLookup": round((perf_counter() - request_started) * 1000, 1),
-                "cacheHit": True,
-            }
-            SIMULATION_RUN_CACHE[cached_result["simulationRunId"]] = cached_result
-            return cached_result
-        if cached_result:
-            logger.info(
-                "Cached simulation %s has no position snapshots; running the current engine.",
-                cached_result.get("simulationRunId"),
-            )
-
-        securities = repository.load_securities()
-        daily_prices = repository.load_daily_prices(req.period_start, req.period_end)
-        trading_days = sorted({item["priceDate"] for item in daily_prices})
-        try:
-            benchmark_data = MarketIndexCollector().ensure_period(
-                req.period_start,
-                req.period_end,
-                trading_days,
-            )
-        except Exception as error:
-            logger.warning(
-                "KRX benchmark collection failed; using the equal-weight fallback",
-                exc_info=error,
-            )
-            benchmark_data = {
-                "status": "FETCH_FAILED",
-                "fetchedCount": 0,
-                "missingCount": len(trading_days) * 2,
-            }
-        market_index_prices = repository.load_market_index_prices(req.period_start, req.period_end)
-        user_trades = repository.load_actual_trades(account_id, req.period_start, req.period_end)
-        principles_data = repository.load_principles(TEST_USER_ID) if compiled_bot else []
-        rule_confirmations = repository.load_rule_confirmations(TEST_USER_ID) if compiled_bot else []
-        disclosure_events = repository.load_disclosures(req.period_start, req.period_end)
-        data_quality = repository.assess_trade_price_quality(account_id, req.period_start, req.period_end)
-        data_load_ms = (perf_counter() - request_started) * 1000
-
-        securities_map = {item["securityId"]: item for item in securities}
-        rule_schema_dict = compiled_bot["ruleSchema"] if compiled_bot else {}
-        rule_compilation = dict(compiled_bot.get("ruleCompilation") or {}) if compiled_bot else {}
-        if compiled_bot:
-            rule_compilation["reusedCompiledBot"] = True
-
-        disclosures_by_date: Dict[str, Dict[int, dict]] = {}
-        disclosure_model_counts: Dict[str, int] = {}
-        for event in disclosure_events:
-            model_name = event.get("analysisModel", "UNKNOWN")
-            disclosure_model_counts[model_name] = disclosure_model_counts.get(model_name, 0) + 1
-            event_date = event["eventDate"]
-            if event.get("availableAt", "")[:10] > event_date:
-                continue
-            disclosures_by_date.setdefault(event_date, {})[event["securityId"]] = event
-
-        engine = BacktestEngine(
-            simulation_run_id=req.simulation_run_id or 1,
-            period_start=req.period_start,
-            period_end=req.period_end,
-            initial_capital=initial_capital,
-            securities_map=securities_map,
-            daily_prices=daily_prices,
-        )
-        initial_positions = {
-            item["securityId"]: Position(
-                security_id=item["securityId"],
-                security_code=item["securityCode"],
-                security_name=item["securityName"],
-                quantity=item["quantity"],
-                average_buy_price=item["averageCost"],
-                current_price=item["marketValue"] / item["quantity"],
-                acquired_date=initial_state["snapshotDate"],
-            )
-            for item in initial_state["holdings"]
-            if item["quantity"] > 0
-        }
-
-        if "ACTUAL_USER" in participant_types:
-            engine.register_variant(
-                1,
-                ActualUserStrategy(1, user_trades, trading_days=trading_days),
-                initial_positions=initial_positions,
-                initial_cash=0.0,
-            )
-        if "PERSONAL_BOT" in participant_types:
-            engine.register_variant(2, PersonalBotStrategy(2, principles_data, rule_schema_dict))
-        if "FAMOUS_STRATEGY" in participant_types:
-            engine.register_variant(3, FamousStrategyBot(3))
-        if "RANDOM_BOT" in participant_types:
-            engine.register_variant(4, RandomBotStrategy(4, seed=RANDOM_TRACE_SEED))
-
-        backtest_started = perf_counter()
-        executed_trades, daily_snapshots = engine.run(disclosures_by_date)
-        backtest_ms = (perf_counter() - backtest_started) * 1000
-        normalized_snapshots = [normalize_daily_snapshot(item) for item in daily_snapshots]
-        normalized_trades = [normalize_trade(item) for item in executed_trades]
-        position_snapshots = engine.position_snapshots
-
-        variant_names = {
-            1: ("ACTUAL_USER", "실제 나"),
-            2: ("PERSONAL_BOT", "나의 투자봇 v1"),
-            3: ("FAMOUS_STRATEGY", "우량 가치·품질 퀀트 봇"),
-            4: ("RANDOM_BOT", "원숭이 봇"),
-        }
-        participant_summary = []
-        for participant_type in participant_types:
-            variant_id = SUPPORTED_PARTICIPANTS[participant_type]
-            snaps = [item for item in normalized_snapshots if item["variantId"] == variant_id]
-            last_snap = snaps[-1] if snaps else {}
-            daily_returns = [float(item["dailyReturn"]) for item in snaps]
-            volatility = 0.0
-            if len(daily_returns) > 1:
-                mean_return = sum(daily_returns) / len(daily_returns)
-                variance = sum((value - mean_return) ** 2 for value in daily_returns) / (len(daily_returns) - 1)
-                volatility = round((variance ** 0.5) * (252 ** 0.5) * 100, 2)
-            cumulative_return = float(last_snap.get("cumulativeReturn", 0.0))
-            minimum_drawdown = min((float(item["drawdownRate"]) for item in snaps), default=0.0)
-            participant_summary.append(
-                {
-                    "variantId": variant_id,
-                    "variantType": participant_type,
-                    "variantName": variant_names[variant_id][1],
-                    "totalEquity": float(last_snap.get("portfolioValue", initial_capital)),
-                    "cumulativeReturnPercent": round(cumulative_return * 100, 2),
-                    "volatilityPercent": volatility,
-                    "mddPercent": round(minimum_drawdown * 100, 2),
-                }
-            )
-
-        random_distribution = None
-        monte_carlo_ms = 0.0
-        if "RANDOM_BOT" in participant_types:
-            monte_carlo_started = perf_counter()
-            random_distribution = run_random_monte_carlo(
-                period_start=req.period_start,
-                period_end=req.period_end,
-                initial_capital=initial_capital,
-                securities_map=securities_map,
-                daily_prices=daily_prices,
-                run_count=RANDOM_MONTE_CARLO_RUN_COUNT,
-                seed_start=0,
-            )
-            monte_carlo_ms = (perf_counter() - monte_carlo_started) * 1000
-            personal_summary = next(
-                (item for item in participant_summary if item["variantType"] == "PERSONAL_BOT"),
-                None,
-            )
-            if personal_summary:
-                add_personal_bot_percentile(
-                    random_distribution,
-                    float(personal_summary["cumulativeReturnPercent"]),
-                )
-            random_summary = next(
-                (item for item in participant_summary if item["variantType"] == "RANDOM_BOT"),
-                None,
-            )
-            if random_summary:
-                random_summary.update({
-                    "traceSeed": RANDOM_TRACE_SEED,
-                    "traceReturnPercent": random_summary["cumulativeReturnPercent"],
-                    "monteCarloMedianReturnPercent": random_distribution["medianReturnPercent"],
-                    "comparisonMode": f"{RANDOM_MONTE_CARLO_RUN_COUNT}_RUN_DISTRIBUTION_WITH_SEED_{RANDOM_TRACE_SEED}_TRACE",
-                })
-
-        analytics_started = perf_counter()
-        benchmarks = calculate_benchmarks(daily_prices, securities_map, market_index_prices)
-        order_audits = [asdict(item) for item in engine.order_audits]
-        screening_audits = engine.screening_audits
-        actual_compliance = evaluate_actual_principle_compliance(
-            normalized_trades,
-            daily_prices,
-            securities_map,
-            rule_schema_dict,
-        )
-        variant_metrics = calculate_variant_metrics(
-            participant_summary,
-            normalized_trades,
-            normalized_snapshots,
-            engine.order_audits,
-            benchmarks,
-            actual_compliance=actual_compliance,
-        )
-        security_contributions = calculate_security_contributions(engine, normalized_trades)
-        action_contributions = calculate_action_contributions(normalized_trades, daily_prices)
-        divergence_moments = find_divergence_moments(normalized_trades, daily_prices)
-        behavior_patterns = detect_behavior_patterns(normalized_trades, daily_prices, normalized_snapshots)
-        analytics_ms = (perf_counter() - analytics_started) * 1000
-        analytics_payload = {
-            "orderAudits": order_audits,
-            "screeningAudits": screening_audits,
-            "variantMetrics": variant_metrics,
-            "benchmarks": benchmarks,
-            "benchmarkData": benchmark_data,
-            "randomDistribution": random_distribution,
-            "securityContributions": security_contributions,
-            "actionContributions": action_contributions,
-            "divergenceMoments": divergence_moments,
-            "behaviorPatterns": behavior_patterns,
-            "actualPrincipleCompliance": actual_compliance,
-            "positionSnapshots": position_snapshots,
-            "rationaleTypeSnapshots": build_rationale_type_snapshots(normalized_trades),
-            # Keep the evaluated principle identities in analytics_json so a
-            # report can be rebuilt without reading today's mutable principle set.
-            "principleItems": principles_data,
-            "ruleConfirmations": rule_confirmations,
-            "securitySnapshots": securities,
-        }
-
-        persistence_started = perf_counter()
-        db_run_id = reserve_simulation_run_to_db(
-            user_id=TEST_USER_ID,
-            period_start=req.period_start,
-            period_end=req.period_end,
-            initial_capital=initial_capital,
-        )
-        persistence_reservation_ms = (perf_counter() - persistence_started) * 1000
-        background_tasks.add_task(
-            save_simulation_run_to_db,
-            user_id=TEST_USER_ID,
-            period_start=req.period_start,
-            period_end=req.period_end,
-            initial_capital=initial_capital,
-            participant_summary=participant_summary,
-            executed_trades=normalized_trades,
-            daily_snapshots=normalized_snapshots,
-            rule_schema=rule_schema_dict,
-            order_audits=order_audits,
-            analytics=analytics_payload,
-            personal_bot_id=compiled_bot["personalBotId"] if compiled_bot else None,
-            simulation_run_id=db_run_id,
-        )
-        report_analytics = dict(analytics_payload)
-        report_analytics["dailyPrices"] = daily_prices
-        report_analytics["dailyPerformance"] = normalized_snapshots
-        report_analytics["ruleSchema"] = rule_schema_dict
-        report_generation_started = perf_counter()
-        deterministic_report = SimulationReportGenerator().build_deterministic_report(
-            simulation_run_id=db_run_id,
-            simulated_trades=normalized_trades,
-            participant_summary=participant_summary,
-            daily_performance=normalized_snapshots,
-            analytics=report_analytics,
-        )
-        report_generation_ms = (perf_counter() - report_generation_started) * 1000
-
-        # Replay the user's own trades once per violated principle so the report
-        # can attribute the gap to a single principle instead of the whole bot.
-        counterfactual_started = perf_counter()
-        actual_summary = next(
-            (item for item in participant_summary if item["variantType"] == "ACTUAL_USER"),
-            {},
-        )
-        try:
-            build_principle_counterfactuals(
-                deterministic_report,
-                period_start=req.period_start,
-                period_end=req.period_end,
-                initial_capital=initial_capital,
-                securities_map=securities_map,
-                daily_prices=daily_prices,
-                trading_days=trading_days,
-                actual_trades=user_trades,
-                simulated_trades=normalized_trades,
-                initial_positions=initial_positions,
-                disclosures_by_date=disclosures_by_date,
-                baseline_return_percent=actual_summary.get("cumulativeReturnPercent"),
-                baseline_mdd_percent=actual_summary.get("mddPercent"),
-            )
-        except Exception as error:
-            logger.warning(
-                "Principle counterfactuals skipped for simulation %s",
-                db_run_id,
-                exc_info=error,
-            )
-        counterfactual_ms = (perf_counter() - counterfactual_started) * 1000
-
-        background_tasks.add_task(
-            save_simulation_report_to_db,
-            db_run_id,
-            deterministic_report,
-        )
-        _schedule_report_enrichment(
-            background_tasks,
-            db_run_id,
-            deterministic_report,
-        )
-        response = {
-            "simulationRunId": db_run_id,
-            "persistenceStatus": "RUNNING",
-            "accountId": account_id,
-            "periodStart": req.period_start,
-            "periodEnd": req.period_end,
-            "initialCapital": initial_capital,
-            "initialState": initial_state,
-            "participantSummary": participant_summary,
-            "personalBotId": compiled_bot["personalBotId"] if compiled_bot else None,
-            "ruleSchema": rule_schema_dict,
-            "profileSource": {
-                "source": "MYSQL",
-                "analysisRunId": compiled_bot.get("analysisRunId") if compiled_bot else None,
-                "analysisVersion": compiled_bot.get("analysisVersion") if compiled_bot else None,
-            },
-            "ruleCompilation": rule_compilation,
-            "totalTradesCount": len(executed_trades),
-            "simulatedTrades": normalized_trades,
-            "dailySnapshots": normalized_snapshots,
-            "dailyPerformance": normalized_snapshots,
-            "orderAudits": order_audits,
-            "screeningAudits": screening_audits,
-            "variantMetrics": variant_metrics,
-            "benchmarks": benchmarks,
-            "benchmarkData": benchmark_data,
-            "randomDistribution": random_distribution,
-            "securityContributions": security_contributions,
-            "actionContributions": action_contributions,
-            "divergenceMoments": divergence_moments,
-            "behaviorPatterns": behavior_patterns,
-            "actualPrincipleCompliance": actual_compliance,
-            "positionSnapshots": position_snapshots,
-            "report_json": deterministic_report,
-            "reportJson": deterministic_report,
-            "dataSource": "MYSQL",
-            "usesMockData": False,
-            "dataQuality": data_quality,
-            "disclosureDataEnabled": bool(disclosure_events),
-            "disclosureAnalysis": {
-                "totalEvents": len(disclosure_events),
-                "byModel": disclosure_model_counts,
-                "historicalBackfillPolicy": "RULE_ONLY",
-                "dailyCollectionPolicy": "OPENAI_REQUIRED_NO_FALLBACK",
-            },
-            "executionPolicy": {
-                "actualUser": "DATABASE_ACTUAL_FILL",
-                "bots": "NEXT_TRADING_DAY_OPEN",
-                "slippageRate": engine.SLIPPAGE_RATE,
-            },
-            "executionTimingMs": {
-                "dataLoad": round(data_load_ms, 1),
-                "backtest": round(backtest_ms, 1),
-                "monteCarlo500Runs": round(monte_carlo_ms, 1),
-                "analytics": round(analytics_ms, 1),
-                "reportGeneration": round(report_generation_ms, 1),
-                "principleCounterfactuals": round(counterfactual_ms, 1),
-                "persistenceReservation": round(persistence_reservation_ms, 1),
-                "responseReady": round((perf_counter() - request_started) * 1000, 1),
-                "cacheHit": False,
-            },
-        }
-        SIMULATION_RUN_CACHE[db_run_id] = response
-        return response
+        return service.run()
     except SimulationDataError as error:
         raise HTTPException(
             status_code=422,
@@ -1001,9 +593,6 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
             message="시뮬레이션을 실행하는 중 서버 오류가 발생했습니다.",
             simulation_run_id=req.simulation_run_id,
         ) from error
-    finally:
-        if repository is not None:
-            repository.close()
 
 
 # ==============================================================================
