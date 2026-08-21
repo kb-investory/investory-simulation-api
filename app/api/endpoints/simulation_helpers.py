@@ -16,8 +16,6 @@ from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 # [전역 인메모리 세션 캐시]
 SIMULATION_RUN_CACHE: Dict[int, dict] = {}
 
-TEST_USER_ID = 1
-
 
 # [DTO 스키마 정의]
 class RuleCompileRequest(BaseModel):

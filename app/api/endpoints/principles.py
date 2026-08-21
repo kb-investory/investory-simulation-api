@@ -14,10 +14,11 @@ import json
 import asyncio
 import logging
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 
 from app.api.error_responses import internal_server_error
+from app.core.auth import get_current_user_id
 
 router = APIRouter(tags=["Principles Management"])
 logger = logging.getLogger(__name__)
@@ -65,7 +66,10 @@ def _merge_rule_json(base: dict, patch: dict) -> dict:
 
 
 @router.post("/principles/proposals/accept", summary="원칙 평가 강화안 적용")
-def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
+def accept_principle_proposal(
+    req: AcceptPrincipleProposalRequest,
+    user_id: int = Depends(get_current_user_id),
+):
     """Apply only a server-stored and validated V3 proposal to the active principle set."""
     from app.modules.simulation.persistence.db_persistence import (
         get_db_connection,
@@ -115,10 +119,11 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                 INSERT IGNORE INTO principle_proposal_applications
                 (simulation_run_id, user_id, recommendation_id, proposal_type,
                  application_status, proposal_snapshot_json, created_at)
-                VALUES (%s, 1, %s, %s, 'PROCESSING', %s, NOW())
+                VALUES (%s, %s, %s, %s, 'PROCESSING', %s, NOW())
                 """,
                 (
                     req.simulationId,
+                    user_id,
                     recommendation_id,
                     proposal_type,
                     json.dumps(proposal, ensure_ascii=False),
@@ -133,11 +138,11 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                     LEFT JOIN principle_set_items item
                       ON item.principle_set_item_id = app.principle_set_item_id
                     WHERE app.simulation_run_id = %s
-                      AND app.user_id = 1
+                      AND app.user_id = %s
                       AND app.recommendation_id = %s
                     FOR UPDATE
                     """,
-                    (req.simulationId, recommendation_id),
+                    (req.simulationId, user_id, recommendation_id),
                 )
                 existing = cur.fetchone()
                 if existing and existing[0] == "APPLIED":
@@ -164,7 +169,8 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                 raise HTTPException(status_code=409, detail="동일한 원칙 제안을 적용 중입니다.")
 
             cur.execute(
-                "SELECT principle_set_id FROM principle_sets WHERE user_id = 1 ORDER BY principle_set_id DESC LIMIT 1"
+                "SELECT principle_set_id FROM principle_sets WHERE user_id = %s ORDER BY principle_set_id DESC LIMIT 1",
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
@@ -262,10 +268,10 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
                     principle_set_item_id = %s,
                     applied_at = NOW()
                 WHERE simulation_run_id = %s
-                  AND user_id = 1
+                  AND user_id = %s
                   AND recommendation_id = %s
                 """,
-                (principle_item_id, req.simulationId, recommendation_id),
+                (principle_item_id, req.simulationId, user_id, recommendation_id),
             )
         conn.commit()
         return {
@@ -293,7 +299,7 @@ def accept_principle_proposal(req: AcceptPrincipleProposalRequest):
         conn.close()
 
 @router.get("/principles/recommendations", summary="추천 원칙 목록 조회")
-def get_recommended_principles():
+def get_recommended_principles(user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: 원칙 추천 팝업/페이지]
     - MySQL DB 기반으로 사용자의 원칙 및 추천 원칙 목록을 조회합니다.
@@ -307,9 +313,9 @@ def get_recommended_principles():
                 SELECT item.principle_set_item_id, item.principle_text, item.rule_json, item.sort_order
                 FROM principle_set_items item
                 JOIN principle_sets pset ON item.principle_set_id = pset.principle_set_id
-                WHERE pset.user_id = 1
+                WHERE pset.user_id = %s
                 ORDER BY item.sort_order ASC
-            """)
+            """, (user_id,))
             rows = cur.fetchall()
             for r in rows:
                 rule_json = {}
@@ -344,7 +350,7 @@ def get_recommended_principles():
         ) from e
 
 
-def _save_principles_db_task(principles_list):
+def _save_principles_db_task(principles_list, user_id: int):
     from app.config import settings
     import pymysql
 
@@ -362,7 +368,7 @@ def _save_principles_db_task(principles_list):
     saved_items = []
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT principle_set_id FROM principle_sets WHERE user_id = 1 LIMIT 1")
+            cur.execute("SELECT principle_set_id FROM principle_sets WHERE user_id = %s LIMIT 1", (user_id,))
             row = cur.fetchone()
             set_id = row[0] if row else 1
 
@@ -414,13 +420,16 @@ def _save_principles_db_task(principles_list):
 
 
 @router.post("/principles", summary="추천 원칙 저장 및 사용자 원칙 업데이트")
-async def save_user_principles(req: SavePrinciplesRequest):
+async def save_user_principles(
+    req: SavePrinciplesRequest,
+    user_id: int = Depends(get_current_user_id),
+):
     """
     [대응 화면: 원칙 선택 저장]
     - 선택한 추천 원칙을 MySQL DB principle_sets / principle_set_items 테이블에 실제로 저장 및 업데이트합니다.
     """
     try:
-        saved_items = await asyncio.to_thread(_save_principles_db_task, req.principles)
+        saved_items = await asyncio.to_thread(_save_principles_db_task, req.principles, user_id)
         return {
             "status": "SUCCESS",
             "message": f"총 {len(saved_items)}개의 투자 원칙이 성공적으로 DB에 적용되었습니다.",

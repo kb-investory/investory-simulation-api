@@ -26,7 +26,11 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENDART_API_KEY: str = os.getenv("OPENDART_API_KEY", "")
     KRX_OPEN_API_KEY: str = os.getenv("KRX_OPEN_API_KEY", "")
-    
+
+    # kbinvestory-backend가 발급하는 RS256 액세스 토큰의 검증 전용 JWKS 엔드포인트.
+    # 이 서비스는 토큰을 발급하지 않는다 — PyJWKClient로 공개키만 가져와 서명을 검증한다.
+    AUTH_JWKS_URL: str = os.getenv("AUTH_JWKS_URL", "")
+
     # LLM Model Configurations
     #
     # Two tiers, chosen by what the task actually needs:

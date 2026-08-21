@@ -52,7 +52,7 @@ from app.modules.simulation.persistence.db_persistence import (
 
 from app.api.endpoints.simulation_helpers import (
     SimulationRunRequest, normalize_daily_snapshot, normalize_trade,
-    SIMULATION_RUN_CACHE, TEST_USER_ID,
+    SIMULATION_RUN_CACHE,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,10 +79,12 @@ class SimulationRunService:
         self,
         req: SimulationRunRequest,
         background_tasks: BackgroundTasks,
+        user_id: int,
         schedule_report_enrichment: Callable,
     ):
         self.req = req
         self.background_tasks = background_tasks
+        self.user_id = user_id
         self.schedule_report_enrichment = schedule_report_enrichment
         self.request_started = perf_counter()
         self.repository: Optional[SimulationRepository] = None
@@ -123,19 +125,19 @@ class SimulationRunService:
             )
 
         self.repository = SimulationRepository(reuse_connection=True)
-        self.account_id = self.repository.resolve_account_id(TEST_USER_ID, req.account_id)
+        self.account_id = self.repository.resolve_account_id(self.user_id, req.account_id)
         self.initial_state = self.repository.load_initial_snapshot(self.account_id, req.period_start)
         self.initial_capital = float(self.initial_state["initialCapital"])
 
         self.compiled_bot = None
         if "PERSONAL_BOT" in self.participant_types:
-            self.compiled_bot = self.repository.load_compiled_personal_bot(TEST_USER_ID, req.personal_bot_id)
+            self.compiled_bot = self.repository.load_compiled_personal_bot(self.user_id, req.personal_bot_id)
 
     # ---- 2. 캐시 확인 ----
     def _check_cache(self) -> Optional[dict]:
         req = self.req
         cached_result = find_existing_simulation_from_db(
-            user_id=TEST_USER_ID,
+            user_id=self.user_id,
             period_start=req.period_start,
             period_end=req.period_end,
             initial_capital=self.initial_capital,
@@ -183,8 +185,8 @@ class SimulationRunService:
             }
         self.market_index_prices = self.repository.load_market_index_prices(req.period_start, req.period_end)
         self.user_trades = self.repository.load_actual_trades(self.account_id, req.period_start, req.period_end)
-        self.principles_data = self.repository.load_principles(TEST_USER_ID) if self.compiled_bot else []
-        self.rule_confirmations = self.repository.load_rule_confirmations(TEST_USER_ID) if self.compiled_bot else []
+        self.principles_data = self.repository.load_principles(self.user_id) if self.compiled_bot else []
+        self.rule_confirmations = self.repository.load_rule_confirmations(self.user_id) if self.compiled_bot else []
         self.disclosure_events = self.repository.load_disclosures(req.period_start, req.period_end)
         self.data_quality = self.repository.assess_trade_price_quality(self.account_id, req.period_start, req.period_end)
         self.data_load_ms = (perf_counter() - self.request_started) * 1000
@@ -368,7 +370,7 @@ class SimulationRunService:
         req = self.req
         persistence_started = perf_counter()
         self.db_run_id = reserve_simulation_run_to_db(
-            user_id=TEST_USER_ID,
+            user_id=self.user_id,
             period_start=req.period_start,
             period_end=req.period_end,
             initial_capital=self.initial_capital,
@@ -376,7 +378,7 @@ class SimulationRunService:
         self.persistence_reservation_ms = (perf_counter() - persistence_started) * 1000
         self.background_tasks.add_task(
             save_simulation_run_to_db,
-            user_id=TEST_USER_ID,
+            user_id=self.user_id,
             period_start=req.period_start,
             period_end=req.period_end,
             initial_capital=self.initial_capital,
