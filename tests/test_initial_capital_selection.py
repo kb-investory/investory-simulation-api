@@ -54,6 +54,7 @@ class InitialCapitalSelectionTests(unittest.TestCase):
                 account_id=None,
                 startDate="2026-07-15",
                 accountId=21,
+                user_id=1,
             )
 
         calculate.assert_called_once_with(start_date="2026-07-15", account_id=21)
@@ -66,6 +67,7 @@ class InitialCapitalSelectionTests(unittest.TestCase):
                 account_id=21,
                 startDate="2026-08-09",
                 accountId=21,
+                user_id=1,
             )
 
         self.assertEqual(context.exception.status_code, 422)

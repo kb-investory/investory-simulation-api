@@ -42,7 +42,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
         calculate.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(simulation.logger, level="ERROR"):
             with self.assertRaises(HTTPException) as raised:
-                simulation.calculate_initial_capital("2026-01-01", 21)
+                simulation.calculate_initial_capital("2026-01-01", 21, user_id=1)
         self.assert_safe_500(raised.exception, "INITIAL_CAPITAL_INTERNAL_ERROR")
 
     @patch("app.api.endpoints.simulation.SimulationRepository.load_initial_snapshot")
@@ -51,7 +51,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
         request = SimulationRunRequest(periodStart="2026-01-01", periodEnd="2026-02-01")
         with self.assertLogs(simulation.logger, level="ERROR"):
             with self.assertRaises(HTTPException) as raised:
-                simulation.run_simulation(request)
+                simulation.run_simulation(request, user_id=1)
         self.assert_safe_500(raised.exception, "SIMULATION_RUN_INTERNAL_ERROR")
 
     @patch("app.modules.simulation.persistence.db_persistence.get_db_connection")
@@ -59,7 +59,7 @@ class ApiErrorSafetyTests(unittest.TestCase):
         get_connection.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(principles.logger, level="ERROR"):
             with self.assertRaises(HTTPException) as raised:
-                principles.get_recommended_principles()
+                principles.get_recommended_principles(user_id=1)
         self.assert_safe_500(raised.exception, "PRINCIPLES_READ_INTERNAL_ERROR")
 
 

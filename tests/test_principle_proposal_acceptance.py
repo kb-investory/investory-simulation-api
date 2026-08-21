@@ -98,7 +98,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             return_value=connection,
         ):
             result = accept_principle_proposal(
-                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001)
+                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001),
+                user_id=1,
             )
 
         self.assertTrue(connection.committed)
@@ -126,7 +127,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             return_value=connection,
         ):
             result = accept_principle_proposal(
-                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001)
+                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001),
+                user_id=1,
             )
 
         update = next(item for item in connection.fake_cursor.executions if item[0].startswith("UPDATE"))
@@ -170,7 +172,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             return_value=connection,
         ):
             result = accept_principle_proposal(
-                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=4001)
+                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=4001),
+                user_id=1,
             )
 
         update = next(item for item in connection.fake_cursor.executions if item[0].startswith("UPDATE"))
@@ -212,7 +215,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
                 AcceptPrincipleProposalRequest(
                     simulationId=10,
                     evaluationId="PE_9_entry_max_5day_return",
-                )
+                ),
+                user_id=1,
             )
 
         self.assertEqual(result["principleSetItemId"], 9)
@@ -239,7 +243,8 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             return_value=connection,
         ):
             result = accept_principle_proposal(
-                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001)
+                AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001),
+                user_id=1,
             )
 
         principle_inserts = [

@@ -27,7 +27,7 @@ class CompiledBotIdempotencyTests(unittest.TestCase):
             "ruleCompilation": {"source": "OPENAI", "model": "gpt-4o-mini"},
         }
 
-        response = compile_simulation_bot(RuleCompileRequest(actualTrades=[]))
+        response = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), user_id=1)
 
         compile_call.assert_not_called()
         repository.save_compiled_personal_bot.assert_not_called()

@@ -129,15 +129,15 @@ class SimulationComparatorDetailTests(unittest.TestCase):
     @patch("app.api.endpoints.simulation.SimulationRepository", return_value=FakeRepository())
     def test_unknown_requested_personal_bot_returns_404(self, repository_class):
         with self.assertRaises(HTTPException) as context:
-            get_comparator_bots(personalBotId="DOES_NOT_EXIST")
+            get_comparator_bots(personalBotId="DOES_NOT_EXIST", user_id=1)
         self.assertEqual(context.exception.status_code, 404)
         self.assertEqual(context.exception.detail["code"], "PERSONAL_BOT_NOT_COMPILED")
 
     @patch("app.api.endpoints.simulation.SimulationRepository", return_value=FakeRepository())
     def test_completed_compile_detail_matches_comparator_and_polling(self, repository_class):
-        compiled = compile_simulation_bot(RuleCompileRequest(actualTrades=[]))
-        comparators = get_comparator_bots(personalBotId="PBOT_1003")
-        polled = get_compile_job_status(compiled["jobId"])
+        compiled = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), user_id=1)
+        comparators = get_comparator_bots(personalBotId="PBOT_1003", user_id=1)
+        polled = get_compile_job_status(compiled["jobId"], user_id=1)
 
         self.assertEqual(compiled["botDetail"], comparators[1])
         self.assertEqual(polled["botDetail"], comparators[1])

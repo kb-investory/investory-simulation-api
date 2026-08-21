@@ -23,10 +23,10 @@ class LatestSimulationTests(unittest.TestCase):
     def test_latest_ignores_newer_incomplete_run(self, latest_id, get_detail):
         get_detail.return_value = {"simulationRun": {"simulationRunId": 20}}
 
-        response = asyncio.run(get_latest_simulation())
+        response = asyncio.run(get_latest_simulation(user_id=1))
 
         latest_id.assert_called_once_with(1)
-        get_detail.assert_called_once_with(20)
+        get_detail.assert_called_once_with(20, 1)
         self.assertEqual(response["simulationRun"]["simulationRunId"], 20)
 
     @patch(
@@ -35,7 +35,7 @@ class LatestSimulationTests(unittest.TestCase):
     )
     def test_latest_returns_404_when_no_completed_result_exists(self, latest_id):
         with self.assertRaises(HTTPException) as context:
-            asyncio.run(get_latest_simulation())
+            asyncio.run(get_latest_simulation(user_id=1))
 
         latest_id.assert_called_once_with(1)
         self.assertEqual(context.exception.status_code, 404)

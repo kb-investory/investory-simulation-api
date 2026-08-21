@@ -20,9 +20,10 @@ import logging
 from copy import deepcopy
 from threading import Lock
 from typing import Dict, List, Optional
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.api.error_responses import internal_server_error
+from app.core.auth import get_current_user_id
 
 from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilationError
 from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
@@ -43,7 +44,7 @@ from app.modules.simulation.persistence.db_persistence import (
 
 from app.api.endpoints.simulation_helpers import (
     RuleCompileRequest, RuleConfirmationRequest, SimulationRunRequest,
-    SIMULATION_RUN_CACHE, TEST_USER_ID,
+    SIMULATION_RUN_CACHE,
 )
 from app.api.endpoints.simulation_run_service import SimulationRunService
 
@@ -127,31 +128,34 @@ def _enrich_simulation_report_in_background(simulation_id: int, base_report: dic
 
 def _load_detail_evidence(
     repository: SimulationRepository,
+    user_id: int,
     account_id: Optional[int] = None,
 ) -> dict:
-    resolved_account_id = repository.resolve_account_id(TEST_USER_ID, account_id)
-    evidence = repository.load_comparator_evidence(TEST_USER_ID, resolved_account_id)
+    resolved_account_id = repository.resolve_account_id(user_id, account_id)
+    evidence = repository.load_comparator_evidence(user_id, resolved_account_id)
     return evidence if isinstance(evidence, dict) else {}
 
 
 def _personal_bot_detail(
     repository: SimulationRepository,
+    user_id: int,
     bot: dict,
     principle_items: Optional[List[dict]] = None,
     account_id: Optional[int] = None,
 ) -> dict:
     if principle_items is None:
         try:
-            principle_items = repository.load_principles(TEST_USER_ID)
+            principle_items = repository.load_principles(user_id)
         except SimulationDataError as error:
             if error.code != "PRINCIPLES_NOT_FOUND":
                 raise
             principle_items = []
-    return build_personal_comparator(bot, principle_items, _load_detail_evidence(repository, account_id))
+    return build_personal_comparator(bot, principle_items, _load_detail_evidence(repository, user_id, account_id))
 
 
 def _completed_compile_response(
     repository: SimulationRepository,
+    user_id: int,
     job_id: str,
     bot: dict,
     principle_items: List[dict],
@@ -160,7 +164,7 @@ def _completed_compile_response(
     compilation_metadata: dict,
     account_id: Optional[int] = None,
 ) -> dict:
-    resolved_account_id = repository.resolve_account_id(TEST_USER_ID, account_id)
+    resolved_account_id = repository.resolve_account_id(user_id, account_id)
     response = {
         "jobId": job_id,
         "status": "COMPLETED",
@@ -176,11 +180,11 @@ def _completed_compile_response(
         "ruleCompilation": compilation_metadata,
         "compileCacheHit": compile_cache_hit,
         "accountId": resolved_account_id,
-        "botDetail": _personal_bot_detail(repository, bot, principle_items, resolved_account_id),
+        "botDetail": _personal_bot_detail(repository, user_id, bot, principle_items, resolved_account_id),
         # The compiler flags thresholds it had to guess. Returning them here is
         # what turns audit.needs_user_confirmation from a dead field into a
         # question the user can actually answer.
-        "ruleConfirmation": _rule_confirmation_view(repository, bot),
+        "ruleConfirmation": _rule_confirmation_view(repository, user_id, bot),
     }
     COMPILE_JOB_CACHE[job_id] = response
     return response
@@ -189,10 +193,10 @@ def _completed_compile_response(
 # ==============================================================================
 # 1. 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
 # ==============================================================================
-def _get_overview_db_task(requested_account_id: Optional[int] = None):
+def _get_overview_db_task(user_id: int, requested_account_id: Optional[int] = None):
     repository = SimulationRepository()
-    account_id = repository.resolve_account_id(TEST_USER_ID, requested_account_id)
-    overview = repository.load_overview(TEST_USER_ID, account_id)
+    account_id = repository.resolve_account_id(user_id, requested_account_id)
+    overview = repository.load_overview(user_id, account_id)
     overview["accountId"] = account_id
     return overview
 
@@ -201,6 +205,7 @@ async def get_simulation_overview(
     start_date: Optional[str] = None,
     account_id: Optional[int] = None,
     accountId: Optional[int] = None,
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     [대응 화면: xCJcT, WYSMi]
@@ -208,7 +213,7 @@ async def get_simulation_overview(
     """
     if account_id and accountId and account_id != accountId:
         raise HTTPException(status_code=422, detail="account_id와 accountId 값이 서로 다릅니다.")
-    overview = await asyncio.to_thread(_get_overview_db_task, account_id or accountId)
+    overview = await asyncio.to_thread(_get_overview_db_task, user_id, account_id or accountId)
     target_account_id = overview["accountId"]
     requested_start = start_date or overview["eligibleStartDate"]
     capital_info = None
@@ -255,6 +260,7 @@ def calculate_initial_capital(
     account_id: Optional[int] = None,
     startDate: Optional[str] = None,
     accountId: Optional[int] = None,
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     [ERD holding_snapshots 기반 초기 자금 산출 API]
@@ -268,7 +274,7 @@ def calculate_initial_capital(
         requested_start_date = start_date or startDate or "2026-03-01"
         repository = SimulationRepository()
         requested_account_id = repository.resolve_account_id(
-            TEST_USER_ID,
+            user_id,
             account_id or accountId,
         )
         calculator = InitialCapitalCalculator()
@@ -298,20 +304,20 @@ def calculate_initial_capital(
 # 2. 최신 원칙 봇 생성 요청 (대응 화면: Inbqv)
 # ==============================================================================
 @router.post("/bots/compile", summary="2. 최신 원칙 봇 생성/컴파일 요청")
-def compile_simulation_bot(req: RuleCompileRequest):
+def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: Inbqv]
     - 사용자의 자연어 투자 원칙과 6축 성향을 수신하여 8대 영역 표준 Rule JSON 봇을 컴파일 생성합니다.
     """
     try:
         repository = SimulationRepository()
-        account_id = repository.resolve_account_id(TEST_USER_ID, req.account_id)
-        principle_items = repository.load_principles(TEST_USER_ID)
+        account_id = repository.resolve_account_id(user_id, req.account_id)
+        principle_items = repository.load_principles(user_id)
         principles = req.principles or [item["principleText"] for item in principle_items]
-        profile = repository.load_latest_investor_profile(TEST_USER_ID)
+        profile = repository.load_latest_investor_profile(user_id)
         actual_trades = req.actual_trades
         if actual_trades is None:
-            overview = repository.load_overview(TEST_USER_ID, account_id)
+            overview = repository.load_overview(user_id, account_id)
             actual_trades = repository.load_actual_trades(
                 account_id,
                 overview["eligibleStartDate"],
@@ -319,7 +325,7 @@ def compile_simulation_bot(req: RuleCompileRequest):
             )
         compiler = AIRuleCompiler()
         input_hash = compiler.build_input_fingerprint(principles, profile, actual_trades)
-        existing_bot = repository.find_compiled_personal_bot_by_input_hash(TEST_USER_ID, input_hash)
+        existing_bot = repository.find_compiled_personal_bot_by_input_hash(user_id, input_hash)
         if existing_bot:
             compilation_metadata = dict(existing_bot.get("ruleCompilation") or {})
             compilation_metadata.update({
@@ -328,6 +334,7 @@ def compile_simulation_bot(req: RuleCompileRequest):
             })
             return _completed_compile_response(
                 repository,
+                user_id,
                 f"JOB_REUSED_{existing_bot['personalBotId']}",
                 existing_bot,
                 principle_items,
@@ -338,18 +345,19 @@ def compile_simulation_bot(req: RuleCompileRequest):
         schema = compiler.compile(principles, profile, actual_trades)
         compiler.last_compilation_metadata["inputHash"] = input_hash
         saved_bot = repository.save_compiled_personal_bot(
-            TEST_USER_ID,
+            user_id,
             schema.to_dict(),
             profile,
             compiler.last_compilation_metadata,
             input_hash,
         )
         # DB의 createdAt까지 다시 읽어 comparator 조회와 완전히 같은 상세 응답을 만듭니다.
-        saved_bot = repository.load_compiled_personal_bot(TEST_USER_ID, saved_bot["personalBotId"])
+        saved_bot = repository.load_compiled_personal_bot(user_id, saved_bot["personalBotId"])
         job_id = f"JOB_{uuid.uuid4().hex[:8].upper()}"
 
         return _completed_compile_response(
             repository,
+            user_id,
             job_id,
             saved_bot,
             principle_items,
@@ -380,7 +388,7 @@ def compile_simulation_bot(req: RuleCompileRequest):
 # 3. 최신 원칙 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
 # ==============================================================================
 @router.get("/bots/compile-jobs/{job_id}", summary="3. 원칙 봇 생성 상태 비동기 조회")
-def get_compile_job_status(job_id: str):
+def get_compile_job_status(job_id: str, user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: Inbqv, AZCR3]
     - 원칙 봇 생성 작업 진행 상태(RUNNING, COMPLETED)를 조회합니다.
@@ -390,12 +398,13 @@ def get_compile_job_status(job_id: str):
         personal_bot_id = job_id.removeprefix("JOB_REUSED_")
         try:
             repository = SimulationRepository()
-            bot = repository.load_compiled_personal_bot(TEST_USER_ID, personal_bot_id)
+            bot = repository.load_compiled_personal_bot(user_id, personal_bot_id)
             result = _completed_compile_response(
                 repository,
+                user_id,
                 job_id,
                 bot,
-                repository.load_principles(TEST_USER_ID),
+                repository.load_principles(user_id),
                 compile_cache_hit=True,
                 compilation_metadata=dict(bot.get("ruleCompilation") or {}),
             )
@@ -411,6 +420,7 @@ def get_compile_job_status(job_id: str):
 # ==============================================================================
 def _rule_confirmation_view(
     repository: SimulationRepository,
+    user_id: int,
     bot: Optional[dict] = None,
 ) -> dict:
     """List every threshold the bot runs on, and say who decided each one.
@@ -419,14 +429,14 @@ def _rule_confirmation_view(
     confirmation table must not take the compiled bot down with it.
     """
     try:
-        confirmations = repository.load_rule_confirmations(TEST_USER_ID)
+        confirmations = repository.load_rule_confirmations(user_id)
     except Exception as error:
         logger.warning("Rule confirmations unavailable (%s)", type(error).__name__)
         confirmations = []
     confirmed_by_rule = {item["targetRule"]: item for item in confirmations}
     if bot is None:
         try:
-            bot = repository.load_compiled_personal_bot(TEST_USER_ID)
+            bot = repository.load_compiled_personal_bot(user_id)
         except Exception:
             bot = None
     if not bot:
@@ -468,14 +478,14 @@ def _rule_confirmation_view(
 
 
 @router.get("/bots/rule-confirmations", summary="4-1. 실행 기준 확정 상태 조회")
-def get_rule_confirmations():
+def get_rule_confirmations(user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: 원칙 봇 기준 확인]
     - 사용자가 확정한 실행 기준과, AI가 추정해 확인이 필요한 기준을 함께 반환합니다.
     """
     repository = SimulationRepository()
     try:
-        return _rule_confirmation_view(repository)
+        return _rule_confirmation_view(repository, user_id)
     except Exception as error:
         raise internal_server_error(
             logger,
@@ -486,7 +496,7 @@ def get_rule_confirmations():
 
 
 @router.post("/bots/rule-confirmations", summary="4-2. 실행 기준 확정")
-def save_rule_confirmations(req: RuleConfirmationRequest):
+def save_rule_confirmations(req: RuleConfirmationRequest, user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: 원칙 봇 기준 확인]
     - AI가 추정한 기준값을 사용자가 확정합니다. 이후 원칙 평가는 확정값을 우선 적용합니다.
@@ -503,7 +513,7 @@ def save_rule_confirmations(req: RuleConfirmationRequest):
                 {"targetRules": unknown},
             )
         stored = repository.save_rule_confirmations(
-            TEST_USER_ID,
+            user_id,
             [item.model_dump() for item in req.confirmations],
         )
         return {
@@ -533,6 +543,7 @@ def save_rule_confirmations(req: RuleConfirmationRequest):
 def get_comparator_bots(
     personalBotId: Optional[str] = None,
     accountId: Optional[int] = None,
+    user_id: int = Depends(get_current_user_id),
 ):
     """
     [대응 화면: Huymt]
@@ -540,14 +551,14 @@ def get_comparator_bots(
     """
     repository = SimulationRepository()
     try:
-        bot = repository.load_compiled_personal_bot(TEST_USER_ID, personalBotId)
+        bot = repository.load_compiled_personal_bot(user_id, personalBotId)
         try:
-            principle_items = repository.load_principles(TEST_USER_ID)
+            principle_items = repository.load_principles(user_id)
         except SimulationDataError as error:
             if error.code != "PRINCIPLES_NOT_FOUND":
                 raise
             principle_items = []
-        return build_comparators(bot, principle_items, _load_detail_evidence(repository, accountId))
+        return build_comparators(bot, principle_items, _load_detail_evidence(repository, user_id, accountId))
     except SimulationDataError as error:
         status_code = 404 if personalBotId and error.code == "PERSONAL_BOT_NOT_COMPILED" else 422
         raise HTTPException(
@@ -560,7 +571,11 @@ def get_comparator_bots(
 # 5. 시뮬레이션 백테스트 실행 (대응 화면: y9DNLy)
 # ==============================================================================
 @router.post("/run", summary="5. 4개 비교 참가자 시뮬레이션 백테스트 실행")
-def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks = None):
+def run_simulation(
+    req: SimulationRunRequest,
+    background_tasks: BackgroundTasks = None,
+    user_id: int = Depends(get_current_user_id),
+):
     """
     [대응 화면: y9DNLy]
     - 4개 대조군 봇의 독립 백테스트를 일별 이벤트 루프로 연산합니다.
@@ -568,7 +583,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
     background_tasks = background_tasks or BackgroundTasks()
     try:
         service = SimulationRunService(
-            req, background_tasks,
+            req, background_tasks, user_id,
             schedule_report_enrichment=_schedule_report_enrichment,
         )
         return service.run()
@@ -598,7 +613,7 @@ def run_simulation(req: SimulationRunRequest, background_tasks: BackgroundTasks 
 # 5-1. 시뮬레이션 비동기 실행 상태 조회
 # ==============================================================================
 @router.get("/{simulation_id}/status", summary="5-1. 시뮬레이션 실행 상태 비동기 조회")
-def get_simulation_run_status(simulation_id: int):
+def get_simulation_run_status(simulation_id: int, user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: y9DNLy 진행률 폴링]
     - 시뮬레이션 실행 작업 진행 상태(RUNNING, COMPLETED)를 조회합니다.
@@ -610,7 +625,7 @@ def get_simulation_run_status(simulation_id: int):
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT run_status, error_message FROM simulation_runs WHERE simulation_run_id = %s AND user_id = %s",
-                (simulation_id, TEST_USER_ID),
+                (simulation_id, user_id),
             )
             row = cur.fetchone()
     finally:
@@ -630,12 +645,12 @@ def get_simulation_run_status(simulation_id: int):
 # 5-2. 과거 시뮬레이션 히스토리 목록 조회 (대응 화면: 대시보드 하단 이력)
 # ==============================================================================
 @router.get("/history", summary="5-2. 과거 시뮬레이션 히스토리 목록 조회")
-def get_simulation_history():
+def get_simulation_history(user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: SimulationDashboard.vue 이력 목록]
     - 사용자가 실행했던 과거 시뮬레이션 회차별 히스토리 기록 목록을 반환합니다.
     """
-    db_history = get_simulation_history_from_db(user_id=1)
+    db_history = get_simulation_history_from_db(user_id=user_id)
     return db_history or []
 
 
@@ -643,7 +658,7 @@ def get_simulation_history():
 # 6. 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
 # ==============================================================================
 @router.get("/latest", summary="6. 최근 시뮬레이션 성과 및 결과 조회")
-async def get_latest_simulation():
+async def get_latest_simulation(user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: xCJcT]
     - 가장 최근 실행된 시뮬레이션의 대시보드 성과 데이터를 조회합니다.
@@ -651,22 +666,22 @@ async def get_latest_simulation():
     """
     if SIMULATION_RUN_CACHE:
         latest_id = list(SIMULATION_RUN_CACHE.keys())[-1]
-        return await asyncio.to_thread(get_simulation_detail, latest_id)
+        return await asyncio.to_thread(get_simulation_detail, latest_id, user_id)
 
     max_id = await asyncio.to_thread(
         get_latest_completed_simulation_id_from_db,
-        TEST_USER_ID,
+        user_id,
     )
     if max_id is None:
         raise HTTPException(status_code=404, detail="저장된 시뮬레이션이 없습니다.")
-    return await asyncio.to_thread(get_simulation_detail, max_id)
+    return await asyncio.to_thread(get_simulation_detail, max_id, user_id)
 
 
 # ==============================================================================
 # 7. 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
 # ==============================================================================
 @router.get("/{simulation_id}", summary="7. 특정 시뮬레이션 상세 결과 조회")
-def get_simulation_detail(simulation_id: int):
+def get_simulation_detail(simulation_id: int, user_id: int = Depends(get_current_user_id)):
     """
     [대응 화면: p3vHxf, rGj4P, GTmqX]
     - 특정 시뮬레이션 ID의 4개 봇 성과 비교, 일별 자산 그래프, 상세 체결 일지를 조회합니다.
@@ -727,7 +742,11 @@ def get_simulation_detail(simulation_id: int):
 # 8. 새 결과 리포트 API (대응 화면: 리포트 탭 / 결과 복기)
 # ==============================================================================
 @router.get("/{simulation_id}/report", summary="8. AI 시뮬레이션 복기 및 결과 리포트 조회")
-def get_simulation_report(simulation_id: int, background_tasks: BackgroundTasks):
+def get_simulation_report(
+    simulation_id: int,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(get_current_user_id),
+):
     """
     [대응 화면: 리포트 탭 / 결과 복기]
     - 백테스트 실행 내역 기반 원칙 준수 복기(decisionReviews), 근거 검증(evidenceReviews),

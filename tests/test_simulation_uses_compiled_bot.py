@@ -83,7 +83,7 @@ class SimulationUsesCompiledBotTests(unittest.TestCase):
             periodEnd="2026-01-02",
             participantTypes=["PERSONAL_BOT"],
             personalBotId="BOT_TEST",
-        ), background_tasks)
+        ), background_tasks, user_id=1)
 
         compiler_call.assert_not_called()
         repository.load_initial_snapshot.assert_called_once_with(27, "2026-01-01")
