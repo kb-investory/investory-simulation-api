@@ -37,8 +37,16 @@ class ApiErrorSafetyTests(unittest.TestCase):
         self.assert_safe_500(response_error, "SAFE_TEST_ERROR")
         self.assertIn(SECRET_ERROR, "\n".join(captured.output))
 
+    # The account lookup runs before the calculator, so leaving it live made this
+    # test depend on which accounts happen to exist in the configured database:
+    # an unresolvable id ended the call with a 422 before the patched failure was
+    # ever reached, and the leak this test exists to catch went unchecked.
+    @patch("app.api.endpoints.simulation.SimulationRepository.resolve_account_id",
+           return_value=21)
     @patch("app.api.endpoints.simulation.InitialCapitalCalculator.calculate")
-    def test_initial_capital_endpoint_does_not_expose_internal_exception(self, calculate):
+    def test_initial_capital_endpoint_does_not_expose_internal_exception(
+        self, calculate, resolve_account_id,
+    ):
         calculate.side_effect = RuntimeError(SECRET_ERROR)
         with self.assertLogs(simulation.logger, level="ERROR"):
             with self.assertRaises(HTTPException) as raised:
