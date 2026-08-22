@@ -1740,6 +1740,13 @@ def _build_reference_principles(
             },
             "title": candidate["title"],
             "description": candidate["description"],
+            # Naming a real investor obliges the screen to show where the
+            # criterion came from, so the citation travels with the rule.
+            "source": {
+                "quote": candidate.get("sourceQuote"),
+                "label": candidate.get("sourceLabel"),
+                "url": candidate.get("sourceUrl"),
+            },
             "targetRules": candidate["targetRules"],
             "ruleJson": candidate["ruleJson"],
             "comparisonEvidence": {

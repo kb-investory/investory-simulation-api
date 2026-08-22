@@ -25,8 +25,10 @@ class SimulationRuleExecutionTests(unittest.TestCase):
             "day5Return": 0.05,
             "movingAverage5": 98.0,
             "movingAverage20": 95.0,
-            "tradingValue": 2_000_000_000,
-            "marketCap": 100_000_000_000,
+            # 비교 전략이 "규모가 검증된 기업"만 보므로 픽스처도 그 기준을 넘겨야
+            # 매수 사유 문구를 검증할 수 있습니다.
+            "tradingValue": 20_000_000_000,
+            "marketCap": 3_000_000_000_000,
             "per": 10.0,
             "pbr": 1.0,
             "roe": 0.15,

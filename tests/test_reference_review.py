@@ -37,7 +37,8 @@ class ReferenceGapTests(unittest.TestCase):
         review = _build_reference_review(
             _catalog("selection.min_passing_score", "universe.min_market_cap",
                      "exit.take_profit_rate", "entry.max_5day_return",
-                     "portfolio.max_single_position_weight"),
+                     "portfolio.max_single_position_weight",
+                     "additional_buy.trigger_drop_rate"),
             [], _participants(),
         )
 
@@ -52,6 +53,7 @@ class ReferenceGapTests(unittest.TestCase):
             selection["strategyRules"],
             ["selection.factor_weights", "selection.min_passing_score"],
         )
+        self.assertTrue(selection["sectionLabel"])
         self.assertTrue(selection["sectionLabel"])
 
 

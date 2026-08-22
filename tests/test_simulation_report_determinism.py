@@ -1,6 +1,10 @@
 import unittest
 from unittest.mock import patch
 
+from app.modules.simulation.engine.strategy_catalog import (
+    VALUE_QUALITY_REFERENCE_PRINCIPLES,
+    VALUE_QUALITY_STRATEGY,
+)
 from app.modules.simulation.analytics.report_analysis import DeterministicReportAnalyzer
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
 
@@ -655,15 +659,32 @@ class SimulationReportDeterminismTests(unittest.TestCase):
 
         references = report["referenceReview"]["references"]
         self.assertEqual(len(references), 2)
-        self.assertNotIn("REF_VALUE_QUALITY_SELECTION", [item["referenceId"] for item in references])
-        self.assertEqual(references[0]["referenceId"], "REF_LIQUID_UNIVERSE")
-        self.assertEqual(references[0]["comparisonEvidence"]["botAppliedTradeCount"], 1)
-        self.assertEqual(references[0]["comparisonEvidence"]["simulationReturnPercent"], 8.5)
-        self.assertFalse(references[0]["comparisonEvidence"]["performanceUsedForSelection"])
-        self.assertEqual(references[0]["adoptionMode"], "REVIEW_ONLY")
-        self.assertEqual(references[0]["recommendationOrigin"]["originLabel"], "비교 전략 참고")
-        self.assertEqual(references[0]["recommendationOrigin"]["botName"], "우량 가치·품질 퀀트 봇")
-        self.assertEqual(references[0]["recommendationOrigin"]["ruleSource"], "SYSTEM_STRATEGY_CONFIG")
+        # 사용자가 이미 가진 selection 규칙은 다시 권하지 않습니다.
+        self.assertNotIn("REF_QUALITY_OVER_PRICE", [item["referenceId"] for item in references])
+        # 순서가 아니라 성질을 확인합니다. 참고 원칙 목록은 카탈로그가 바뀌면 함께 바뀝니다.
+        for reference in references:
+            evidence = reference["comparisonEvidence"]
+            self.assertEqual(evidence["simulationReturnPercent"], 8.5)
+            self.assertFalse(evidence["performanceUsedForSelection"])
+            self.assertEqual(reference["adoptionMode"], "REVIEW_ONLY")
+            self.assertEqual(reference["recommendationOrigin"]["originLabel"], "비교 전략 참고")
+            self.assertEqual(
+                reference["recommendationOrigin"]["botName"],
+                VALUE_QUALITY_STRATEGY["variantName"],
+            )
+            self.assertEqual(reference["recommendationOrigin"]["ruleSource"], "SYSTEM_STRATEGY_CONFIG")
+            # 실존 인물의 기준을 인용하므로 출처 없이 표시되면 안 됩니다.
+            self.assertTrue(reference["source"]["quote"])
+            self.assertTrue(reference["source"]["url"])
+
+        buy_side = next(
+            item for item in references
+            if "BUY" in dict(
+                (candidate["referenceId"], candidate["applicableTradeSides"])
+                for candidate in VALUE_QUALITY_REFERENCE_PRINCIPLES
+            )[item["referenceId"]]
+        )
+        self.assertEqual(buy_side["comparisonEvidence"]["botAppliedTradeCount"], 1)
 
     def test_one_trade_is_evaluated_against_all_applicable_principles(self):
         trade = {
