@@ -3,14 +3,14 @@
 [API Endpoint Router] simulation.py
 ================================================================================
 ■ 프론트엔드 대응 엔드포인트 (8종 완전 매핑):
-  1. GET  /api/simulation/overview                        : 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
-  2. POST /api/simulation/bots/compile                     : 최신 원칙 봇 생성/컴파일 요청 (대응 화면: Inbqv)
-  3. GET  /api/simulation/bots/compile-jobs/{jobId}        : 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
-  4. GET  /api/simulation/bots/comparators                 : 비교 기준 봇 목록 조회 (대응 화면: Huymt)
-  5. POST /api/simulation/run                              : 시뮬레이션 실행 (대응 화면: y9DNLy)
-  6. GET  /api/simulation/latest                           : 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
-  7. GET  /api/simulation/{simulationId}                   : 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
-  8. GET  /api/simulation/{simulationId}/report            : AI 시뮬레이션 복기 및 결과 리포트 조회
+  1. GET  /simulation/overview                        : 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
+  2. POST /simulation/bots/compile                     : 최신 원칙 봇 생성/컴파일 요청 (대응 화면: Inbqv)
+  3. GET  /simulation/bots/compile-jobs/{jobId}        : 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
+  4. GET  /simulation/bots/comparators                 : 비교 기준 봇 목록 조회 (대응 화면: Huymt)
+  5. POST /simulation/run                              : 시뮬레이션 실행 (대응 화면: y9DNLy)
+  6. GET  /simulation/latest                           : 최근 시뮬레이션 성과 조회 (대응 화면: xCJcT)
+  7. GET  /simulation/{simulationId}                   : 시뮬레이션 상세 조회 (대응 화면: p3vHxf, rGj4P, GTmqX)
+  8. GET  /simulation/{simulationId}/report            : AI 시뮬레이션 복기 및 결과 리포트 조회
 ================================================================================
 """
 

@@ -3,9 +3,9 @@
 [API Endpoint Router] principles.py
 ================================================================================
 ■ 엔드포인트:
-  - POST /api/simulation/principles/proposals/accept : 검증된 기존 원칙 강화안 적용
-  - GET  /api/simulation/principles/recommendations : 성향 및 시뮬레이션 복기 기반 추천 원칙 목록 조회
-  - POST /api/simulation/principles                 : 추천된/사용자정의 원칙을 실제 사용자 활성 원칙으로 저장
+  - POST /simulation/principles/proposals/accept : 검증된 기존 원칙 강화안 적용
+  - GET  /simulation/principles/recommendations : 성향 및 시뮬레이션 복기 기반 추천 원칙 목록 조회
+  - POST /simulation/principles                 : 추천된/사용자정의 원칙을 실제 사용자 활성 원칙으로 저장
 ================================================================================
 """
 
