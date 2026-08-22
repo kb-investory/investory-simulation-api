@@ -92,54 +92,6 @@ def get_db_connection():
         autocommit=False
     )
 
-def ensure_initial_seed_data(conn):
-    """FK 제약조건 충족을 위한 기본 user, principle_set, securities 시드 데이터 확인"""
-    with conn.cursor() as cur:
-        # User 1 확인
-        cur.execute("SELECT user_id FROM users WHERE user_id = 1")
-        if not cur.fetchone():
-            cur.execute(
-                "INSERT INTO users (user_id, email, nickname, provider, status) "
-                "VALUES (1, 'user1@investory.kr', '투자자1', 'LOCAL', 'ACTIVE')"
-            )
-        # PrincipleSet 1 확인
-        cur.execute("SELECT principle_set_id FROM principle_sets WHERE principle_set_id = 1")
-        if not cur.fetchone():
-            cur.execute(
-                "INSERT INTO principle_sets (principle_set_id, user_id, version_no, set_status) "
-                "VALUES (1, 1, 1, 'ACTIVE')"
-            )
-        # Securities 101~105 확인
-        sec_seeds = [
-            (101, "005930", "삼성전자", "KOSPI", "전기전자", "반도체"),
-            (102, "000660", "SK하이닉스", "KOSPI", "전기전자", "반도체"),
-            (103, "035420", "NAVER", "KOSPI", "서비스업", "인터넷"),
-            (104, "035720", "카카오", "KOSPI", "서비스업", "인터넷"),
-            (105, "005380", "현대차", "KOSPI", "운수장비", "자동차")
-        ]
-        for s_id, code, name, market, sector, industry in sec_seeds:
-            cur.execute("SELECT security_id FROM securities WHERE security_id = %s", (s_id,))
-            if not cur.fetchone():
-                cur.execute(
-                    "INSERT INTO securities (security_id, security_code, security_name, market_type, sector_name, industry_name) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (s_id, code, name, market, sector, industry)
-                )
-
-        # simulation_runs 테이블 report_json 컬럼 존재 여부 확인 및 자동 추가
-        try:
-            cur.execute(
-                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'simulation_runs' AND COLUMN_NAME = 'report_json'"
-            )
-            if not cur.fetchone():
-                cur.execute("ALTER TABLE simulation_runs ADD COLUMN report_json LONGTEXT NULL COMMENT 'AI 성과 복기 및 학습 인사이트 리포트 JSON'")
-                print("[DB Schema] simulation_runs 테이블에 report_json 컬럼이 새로 추가되었습니다.")
-        except Exception as e:
-            print(f"[DB Schema Check Warning] report_json 컬럼 확인/추가 중 경고: {e}")
-
-        conn.commit()
-
 def save_simulation_run_to_db(
     user_id: int,
     period_start: str,

@@ -3,8 +3,14 @@
 import json
 from urllib.error import HTTPError
 
-from app.modules.simulation.db_persistence import get_db_connection
-from app.modules.simulation.market_index_collector import MarketIndexCollector
+import sys
+from pathlib import Path
+
+# 스크립트를 직접 실행해도 app 패키지를 찾도록 프로젝트 루트를 경로에 추가합니다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.modules.simulation.persistence.db_persistence import get_db_connection
+from app.modules.simulation.collectors.market_index_collector import MarketIndexCollector
 
 
 def latest_trading_dates(limit: int = 90) -> list[str]:

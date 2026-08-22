@@ -5,7 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 
-from app.modules.simulation.security_price_collector import SecurityPriceCollector
+import sys
+from pathlib import Path
+
+# 스크립트를 직접 실행해도 app 패키지를 찾도록 프로젝트 루트를 경로에 추가합니다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.modules.simulation.collectors.security_price_collector import SecurityPriceCollector
 
 
 def main() -> None:

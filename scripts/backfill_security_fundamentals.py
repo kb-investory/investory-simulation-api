@@ -11,7 +11,7 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.modules.simulation.fundamentals_collector import FundamentalsCollector
+from app.modules.simulation.collectors.fundamentals_collector import FundamentalsCollector
 
 
 def main() -> None:

@@ -23,7 +23,6 @@ class Settings:
     
     # API Keys
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENDART_API_KEY: str = os.getenv("OPENDART_API_KEY", "")
     KRX_OPEN_API_KEY: str = os.getenv("KRX_OPEN_API_KEY", "")
 
