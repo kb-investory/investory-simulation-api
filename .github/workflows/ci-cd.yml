@@ -64,19 +64,21 @@ jobs:
           echo "image=$IMAGE:${{ github.sha }}" >> "$GITHUB_OUTPUT"
           echo "image_latest=$IMAGE:latest" >> "$GITHUB_OUTPUT"
 
-      - name: Build image
-        run: |
-          docker build \
-            --provenance=false \
-            --sbom=false \
-            -t ${{ steps.meta.outputs.image }} \
-            -t ${{ steps.meta.outputs.image_latest }} \
-            .
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Push image
-        run: |
-          docker push ${{ steps.meta.outputs.image }}
-          docker push ${{ steps.meta.outputs.image_latest }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.image_latest }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   deploy:
     name: Deploy to VM
