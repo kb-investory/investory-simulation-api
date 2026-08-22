@@ -119,6 +119,14 @@ class SimulationReportGenerator:
         unavailable key or search never prevents report delivery.
         """
         metadata = report.setdefault("generationMetadata", {})
+        if not settings.EVIDENCE_VERIFICATION_ENABLED:
+            # NOT_CONFIGURED is a terminal state the client already knows, so a
+            # poll ends here rather than waiting for a check that never runs.
+            metadata["thesisVerificationStatus"] = "NOT_CONFIGURED"
+            metadata["thesisVerificationSource"] = "NONE"
+            metadata["thesisVerificationTargetCount"] = 0
+            metadata["thesisVerificationCompletedCount"] = 0
+            return
         reviews = [
             review for review in report.get("keyTradeReviews", [])[:3]
             if _is_verifiable(review)

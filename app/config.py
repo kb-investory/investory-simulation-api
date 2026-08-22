@@ -55,6 +55,13 @@ class Settings:
     # sources actually support the user's thesis is the judgment, and there the
     # reasoning tier is measurably more willing to answer "not confirmed"
     # instead of inflating a single article into a realized thesis.
+    # Verification costs two model calls per key trade, one of them a web
+    # search, and the result currently has nowhere to appear: the response
+    # contract carries no thesisOutcome. It stays off until a screen reads it.
+    EVIDENCE_VERIFICATION_ENABLED: bool = (
+        os.getenv("EVIDENCE_VERIFICATION_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     THESIS_VERIFICATION_MODEL: str = os.getenv("THESIS_VERIFICATION_MODEL", "")
     EVIDENCE_SEARCH_MODEL: str = (
         os.getenv("EVIDENCE_SEARCH_MODEL") or THESIS_VERIFICATION_MODEL or FAST_MODEL

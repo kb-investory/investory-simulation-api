@@ -7,6 +7,7 @@ from app.modules.simulation.engine.strategy_catalog import (
 )
 from app.modules.simulation.analytics.report_analysis import DeterministicReportAnalyzer
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
+from app.config import settings
 
 
 def _suggestions(report: dict) -> list:
@@ -179,6 +180,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             "verificationStatus": "COMPLETED",
         }
         with (
+            patch.object(settings, "EVIDENCE_VERIFICATION_ENABLED", True),
             patch.object(generator, "_call_llm_for_narratives", return_value={}),
             patch.object(generator, "_call_web_thesis_verifier", return_value=verified) as verifier,
         ):
@@ -202,6 +204,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             1, self.trades, self.participants, analytics=self.analytics,
         )
         with (
+            patch.object(settings, "EVIDENCE_VERIFICATION_ENABLED", True),
             patch.object(generator, "_call_llm_for_narratives", return_value={}),
             patch.object(generator, "_call_web_thesis_verifier") as verifier,
         ):
@@ -214,6 +217,28 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertTrue(all("thesisOutcome" not in item for item in enriched["decisionReviews"]))
         self.assertEqual(enriched["generationMetadata"]["thesisVerificationStatus"], "NOT_APPLICABLE")
         self.assertEqual(enriched["generationMetadata"]["thesisVerificationTargetCount"], 0)
+
+    def test_verification_stays_off_until_a_screen_reads_it(self):
+        generator = SimulationReportGenerator(api_key="configured-key")
+        trades = [dict(self.trades[0], decisionReason="2분기 실적이 개선될 것으로 판단")]
+        report = generator.build_deterministic_report(
+            1, trades, self.participants, analytics=self.analytics,
+        )
+        with (
+            patch.object(settings, "EVIDENCE_VERIFICATION_ENABLED", False),
+            patch.object(generator, "_call_llm_for_narratives", return_value={}),
+            patch.object(generator, "_call_web_thesis_verifier") as verifier,
+        ):
+            enriched = generator.enrich_report(report)
+
+        # Two model calls per key trade are not worth making while nothing
+        # displays the answer, and the poll has to end on a state the client
+        # already recognises.
+        verifier.assert_not_called()
+        self.assertEqual(
+            enriched["generationMetadata"]["thesisVerificationStatus"], "NOT_CONFIGURED"
+        )
+        self.assertTrue(all("thesisOutcome" not in item for item in enriched["decisionReviews"]))
 
     def test_verification_marks_the_evidence_without_inventing_a_principle(self):
         report = {
