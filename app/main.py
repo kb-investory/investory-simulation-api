@@ -8,8 +8,14 @@
 ================================================================================
 """
 
-from fastapi import FastAPI
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 from app.config import settings
 from app.api.router import api_router
 
@@ -31,6 +37,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+def _error_body(error_code: str, message: str, field_errors=None) -> dict:
+    """The single error shape every endpoint answers with."""
+    return {
+        "errorCode": error_code,
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "fieldErrors": field_errors,
+    }
+
+
+@app.exception_handler(StarletteHTTPException)
+def handle_http_exception(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    # Endpoints raise either a plain message or a dict carrying its own code.
+    detail = exc.detail
+    if isinstance(detail, dict):
+        error_code = str(detail.get("code") or f"HTTP_{exc.status_code}")
+        message = str(detail.get("message") or "")
+    else:
+        error_code = f"HTTP_{exc.status_code}"
+        message = str(detail)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_error_body(error_code, message),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+def handle_validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    field_errors = [
+        {
+            "field": ".".join(str(part) for part in item.get("loc", [])[1:]) or "body",
+            "message": item.get("msg", ""),
+        }
+        for item in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content=_error_body("VALIDATION_ERROR", "요청 값을 확인해 주세요.", field_errors),
+    )
+
 
 # REST API 라우터 마운트
 app.include_router(api_router, prefix=settings.API_PREFIX)
