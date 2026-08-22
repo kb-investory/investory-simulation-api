@@ -75,6 +75,8 @@ class PrincipleCounterfactualTests(unittest.TestCase):
         }
 
     def _report(self, judgment="VIOLATED", action="BUY"):
+        # The evaluation carries the trades it judged, so the replay no longer
+        # depends on how many decision reviews the report chose to deliver.
         return {
             "principleEvaluations": [{
                 "evaluationId": "PE_9_entry_max_5day_return",
@@ -82,15 +84,11 @@ class PrincipleCounterfactualTests(unittest.TestCase):
                 "principleText": "급등주를 추격매수하지 않는다",
                 "targetRule": "entry.max_5day_return",
                 "verdict": "STRENGTHEN",
-            }],
-            "decisionReviews": [{
-                "tradeId": 5001,
-                "action": action,
-                "principleMatches": [{
-                    "principleSetItemId": 9,
-                    "targetRule": "entry.max_5day_return",
-                    "judgment": judgment,
-                }],
+                "violatingTrades": (
+                    [{"tradeId": 5001, "action": action}]
+                    if judgment == "VIOLATED"
+                    else []
+                ),
             }],
         }
 

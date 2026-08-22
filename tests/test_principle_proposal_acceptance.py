@@ -84,7 +84,11 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         return {
             "report_json": {
                 "reportVersion": "DETERMINISTIC",
-                "principleReinforcements": [proposal],
+                "principleEvaluations": [{
+                    "evaluationId": "PE_9_entry_max_5day_return",
+                    "verdict": "STRENGTHEN",
+                    "suggestion": proposal,
+                }],
             }
         }
 

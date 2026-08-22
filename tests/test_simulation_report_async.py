@@ -25,7 +25,10 @@ class SimulationReportAsyncTests(unittest.TestCase):
 
         result = simulation.get_simulation_report(987654, background_tasks)
 
-        self.assertIs(result, report)
+        # The stored report is answered in the delivered shape without waiting,
+        # and the narrative it is still missing is scheduled behind the response.
+        self.assertEqual(result["generationMetadata"]["narrativeStatus"], "PENDING")
+        self.assertNotIn("reportVersion", result)
         self.assertEqual(len(background_tasks.tasks), 1)
 
     def test_in_progress_enrichment_is_not_started_twice(self):

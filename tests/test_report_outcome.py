@@ -40,7 +40,7 @@ class OutcomeBranchTests(unittest.TestCase):
 
         self.assertEqual(
             _outcome_branch(ranked, _summary(violated=5)),
-            "USER_AHEAD_LUCKY",
+            "ACTUAL_AHEAD_WITH_VIOLATIONS",
         )
 
     def test_a_first_place_with_the_rules_kept_is_praised(self):
@@ -48,7 +48,7 @@ class OutcomeBranchTests(unittest.TestCase):
 
         self.assertEqual(
             _outcome_branch(ranked, _summary(violated=0)),
-            "USER_AHEAD_DISCIPLINED",
+            "ACTUAL_DISCIPLINED",
         )
 
     def test_one_stray_violation_does_not_flip_a_good_run_into_luck(self):
@@ -56,7 +56,7 @@ class OutcomeBranchTests(unittest.TestCase):
 
         self.assertEqual(
             _outcome_branch(ranked, _summary(violated=1)),
-            "USER_AHEAD_DISCIPLINED",
+            "ACTUAL_DISCIPLINED",
         )
 
     def test_random_trading_winning_overrides_every_other_story(self):
@@ -68,7 +68,7 @@ class OutcomeBranchTests(unittest.TestCase):
     def test_the_principle_bot_winning_points_at_the_divergence(self):
         ranked = _ranked(PERSONAL_BOT=12.0, ACTUAL_USER=5.0, RANDOM_BOT=1.0)
 
-        self.assertEqual(_outcome_branch(ranked, _summary()), "BOT_AHEAD")
+        self.assertEqual(_outcome_branch(ranked, _summary()), "PERSONAL_BOT_AHEAD")
 
     def test_the_comparison_strategy_winning_is_its_own_branch(self):
         ranked = _ranked(FAMOUS_STRATEGY=15.0, ACTUAL_USER=5.0, PERSONAL_BOT=4.0)
@@ -79,7 +79,7 @@ class OutcomeBranchTests(unittest.TestCase):
         # Its 0% line is an absence of result, not a result.
         ranked = _ranked(ACTUAL_USER=5.0, PERSONAL_BOT=(0.0, 0))
 
-        self.assertEqual(_outcome_branch(ranked, _summary()), "INCONCLUSIVE")
+        self.assertEqual(_outcome_branch(ranked, _summary()), "UNKNOWN")
 
     def test_an_unknown_winner_does_not_borrow_another_branch_story(self):
         # A blank or future variantType used to fall through into
@@ -93,10 +93,10 @@ class OutcomeBranchTests(unittest.TestCase):
                     "cumulativeReturnPercent": 30.0, "mddPercent": -1.0,
                     "tradeCount": 3, "rank": 1,
                 })
-                self.assertEqual(_outcome_branch(ranked, _summary()), "INCONCLUSIVE")
+                self.assertEqual(_outcome_branch(ranked, _summary()), "UNKNOWN")
 
     def test_no_participants_at_all_is_inconclusive(self):
-        self.assertEqual(_outcome_branch([], _summary()), "INCONCLUSIVE")
+        self.assertEqual(_outcome_branch([], _summary()), "UNKNOWN")
 
 
 class OutcomePayloadTests(unittest.TestCase):
@@ -119,7 +119,7 @@ class OutcomePayloadTests(unittest.TestCase):
             coverage={"uncoveredTradeCount": 12},
         )
 
-        self.assertEqual(outcome["branch"], "BOT_AHEAD")
+        self.assertEqual(outcome["branch"], "PERSONAL_BOT_AHEAD")
         self.assertEqual(outcome["winnerVariantType"], "PERSONAL_BOT")
         self.assertEqual(outcome["focusSection"], "DIVERGENCE")
         self.assertEqual([item["variantType"] for item in outcome["ranking"]],
@@ -142,7 +142,7 @@ class OutcomePayloadTests(unittest.TestCase):
         counts = {item["variantType"]: item["tradeCount"] for item in outcome["ranking"]}
         self.assertEqual(counts, {"ACTUAL_USER": 3, "PERSONAL_BOT": 0})
         # The bot placed no orders, so the report refuses to declare it the winner.
-        self.assertEqual(outcome["branch"], "INCONCLUSIVE")
+        self.assertEqual(outcome["branch"], "UNKNOWN")
 
     def test_every_branch_has_copy_and_a_focus_section(self):
         from app.modules.simulation.analytics.report_analysis import OUTCOME_COPY

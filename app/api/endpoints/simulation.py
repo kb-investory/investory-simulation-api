@@ -29,6 +29,7 @@ from app.modules.simulation.rules.compiler import AIRuleCompiler, RuleCompilatio
 from app.modules.simulation.rules.strengthen_spec import RULE_STRENGTHEN_SPEC
 from app.modules.simulation.persistence.capital_calculator import InitialCapitalCalculator
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
+from app.modules.simulation.analytics.report_analysis import deliverable
 from app.modules.simulation.analytics.analytics import find_divergence_moments
 from app.modules.simulation.persistence.repository import SimulationDataError, SimulationRepository
 from app.modules.simulation.analytics.comparator_details import (
@@ -749,8 +750,8 @@ def get_simulation_report(
 ):
     """
     [대응 화면: 리포트 탭 / 결과 복기]
-    - 백테스트 실행 내역 기반 원칙 준수 복기(decisionReviews), 근거 검증(evidenceReviews),
-      학습 인사이트(learningInsights), 기존 원칙 평가(principleEvaluations), 강화안을 종합 반환합니다.
+    - 1위가 누구냐에 따라 갈리는 결과(outcome)와 그 갈래가 쓰는 섹션만 반환합니다.
+    - 저장본은 전체 분석을 유지하고, 화면이 읽는 형태로만 좁혀서 내보냅니다.
     """
     try:
         # 1. 인메모리 캐시에서 먼저 확인
@@ -779,7 +780,7 @@ def get_simulation_report(
                     cached_report,
                 )
             print(f"[Simulation Endpoint] simulation_id={simulation_id} 기존 저장된 report_json 반환")
-            return cached_report
+            return deliverable(cached_report)
 
         generator = SimulationReportGenerator()
         report_analytics = _analytics_response(detail_data)
@@ -819,7 +820,7 @@ def get_simulation_report(
                 report_data,
             )
 
-        return report_data
+        return deliverable(report_data) if report_data else report_data
     except HTTPException:
         raise
     except Exception as e:

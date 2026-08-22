@@ -4,8 +4,9 @@
 ================================================================================
 ■ 전체 기능 설명:
   - 백테스트 실행 데이터(실제 사용자 매매, 원칙 봇 매매, 일별 성과)를 종합 분석하여
-    감정 복기(decisionReviews), 근거 검증(evidenceReviews), 학습 인사이트(learningInsights),
-    기존 원칙 평가(principleEvaluations)와 검증된 강화안 리포트를 산출하는 모듈입니다.
+    1위가 누구냐에 따라 갈리는 결과(outcome)와 그 갈래가 근거로 드는 대표 거래
+    (decisionReviews / evidenceReviews), 기존 원칙 평가(principleEvaluations)를
+    산출하는 모듈입니다.
 ================================================================================
 """
 
@@ -15,7 +16,11 @@ from typing import List, Optional
 
 from app.modules.simulation.llm_client import call_openai_chat_json
 from app.modules.simulation.prompts import SYSTEM_REPORT_PROMPT, build_user_report_prompt
-from app.modules.simulation.analytics.report_analysis import REPORT_IDENTITY, DeterministicReportAnalyzer
+from app.modules.simulation.analytics.report_analysis import (
+    REPORT_IDENTITY,
+    DeterministicReportAnalyzer,
+    _is_verifiable,
+)
 from app.modules.simulation.analytics.evidence_verification import EvidenceJudgmentAgent, EvidenceSearchAgent
 from app.config import settings
 
@@ -75,9 +80,7 @@ class SimulationReportGenerator:
             report["generationMetadata"]["narrativeSource"] = (
                 "OPENAI" if merged_count else "TEMPLATE_FALLBACK"
             )
-            proposal_items = (
-                report.get("principleReinforcements", [])
-            )
+            proposal_items = self._proposals(report)
             report["generationMetadata"]["proposalSource"] = (
                 "OPENAI_VALIDATED"
                 if any(item.get("proposalSource") == "OPENAI_VALIDATED" for item in proposal_items)
@@ -95,14 +98,36 @@ class SimulationReportGenerator:
         self._enrich_thesis_outcomes(report)
         return report
 
+    @staticmethod
+    def _proposals(report: dict) -> List[dict]:
+        """Every strengthening proposal the report carries, in one place."""
+        return [
+            item["suggestion"]
+            for item in report.get("principleEvaluations", [])
+            if isinstance(item.get("suggestion"), dict)
+        ]
+
     def _enrich_thesis_outcomes(self, report: dict) -> None:
         """Verify whether a user's stated investment thesis later materialized.
 
-        This intentionally runs only for the three selected key trades and is
-        best-effort: an unavailable key/search never prevents report delivery.
+        Only trades that recorded a reason can be checked, so only those receive
+        a thesisOutcome. A trade without one is left without the field entirely
+        rather than carrying an empty verdict that reads like a failed check --
+        the verification UI can then select on its presence alone.
+
+        This runs for the selected key trades only and is best-effort: an
+        unavailable key or search never prevents report delivery.
         """
-        reviews = report.get("keyTradeReviews", [])[:3]
+        metadata = report.setdefault("generationMetadata", {})
+        reviews = [
+            review for review in report.get("keyTradeReviews", [])[:3]
+            if _is_verifiable(review)
+        ]
+        metadata["thesisVerificationTargetCount"] = len(reviews)
+        metadata["thesisVerificationCompletedCount"] = 0
         if not reviews:
+            metadata["thesisVerificationStatus"] = "NOT_APPLICABLE"
+            metadata["thesisVerificationSource"] = "NONE"
             return
         for review in reviews:
             review["thesisOutcome"] = self._unconfirmed_thesis_outcome(
@@ -111,7 +136,8 @@ class SimulationReportGenerator:
             )
         self._sync_evidence_verification(report)
         if not self.api_key or self.api_key.startswith("your_") or len(self.api_key) <= 10:
-            report["generationMetadata"]["thesisVerificationStatus"] = "NOT_CONFIGURED"
+            metadata["thesisVerificationStatus"] = "NOT_CONFIGURED"
+            metadata["thesisVerificationSource"] = "NONE"
             return
         completed = 0
         for review in reviews:
@@ -122,13 +148,13 @@ class SimulationReportGenerator:
                     completed += 1
             except Exception as error:
                 logger.warning("Thesis verification failed for trade %s (%s)", review.get("tradeId"), type(error).__name__)
-        report["generationMetadata"]["thesisVerificationStatus"] = (
+        metadata["thesisVerificationCompletedCount"] = completed
+        metadata["thesisVerificationStatus"] = (
             "COMPLETED" if completed == len(reviews) else "PARTIAL" if completed else "FAILED"
         )
-        report["generationMetadata"]["thesisVerificationSource"] = "OPENAI_WEB_SEARCH" if completed else "NONE"
+        metadata["thesisVerificationSource"] = "OPENAI_WEB_SEARCH" if completed else "NONE"
         if completed:
             self._sync_evidence_verification(report)
-            self._apply_thesis_learning_and_principles(report)
 
     @staticmethod
     def _sync_evidence_verification(report: dict) -> None:
@@ -148,63 +174,6 @@ class SimulationReportGenerator:
                 continue
             evidence["webVerdict"] = verdict_map.get(outcome.get("verdict"), "UNCONFIRMED")
             evidence["webVerification"] = outcome
-
-        for security in report.get("securityEvidenceReviews", []):
-            annotations = security.setdefault("chartAnnotations", [])
-            seen = {
-                (item.get("date"), item.get("type"), item.get("tradeId"), item.get("sourceUrl"))
-                for item in annotations
-            }
-            for evidence in security.get("evidenceReviews", []):
-                outcome = outcomes_by_trade.get(evidence.get("tradeId")) or {}
-                for claim in outcome.get("claimResults") or []:
-                    for source in claim.get("sources") or []:
-                        published_at = str(source.get("publishedAt") or "")[:10]
-                        if not published_at:
-                            continue
-                        marker = {
-                            "date": published_at,
-                            "type": "EVIDENCE_EVENT",
-                            "tradeId": evidence.get("tradeId"),
-                            "label": str(source.get("title") or claim.get("claim") or "근거 자료"),
-                            "sourceUrl": source.get("url"),
-                        }
-                        key = (marker["date"], marker["type"], marker["tradeId"], marker["sourceUrl"])
-                        if key not in seen:
-                            annotations.append(marker)
-                            seen.add(key)
-            annotations.sort(key=lambda item: (str(item.get("date") or ""), str(item.get("tradeId") or "")))
-
-    @staticmethod
-    def _apply_thesis_learning_and_principles(report: dict) -> None:
-        """Feed completed web-verification judgments into insights and proposals."""
-        outcomes = [
-            item.get("thesisOutcome", {})
-            for item in report.get("keyTradeReviews", [])[:3]
-            if item.get("thesisOutcome", {}).get("verificationStatus") == "COMPLETED"
-        ]
-        realized = sum(item.get("verdict") == "REALIZED" for item in outcomes)
-        partial = sum(item.get("verdict") == "PARTIALLY_REALIZED" for item in outcomes)
-        not_realized = sum(item.get("verdict") == "NOT_REALIZED" for item in outcomes)
-        total = len(outcomes)
-        if not total:
-            return
-        insight = report.setdefault("learningInsights", {})
-        insight["thesisOutcomeSummary"] = {
-            "assessedTradeCount": total,
-            "realizedTradeCount": realized,
-            "partiallyRealizedTradeCount": partial,
-            "notRealizedTradeCount": not_realized,
-            "source": "OPENAI_WEB_SEARCH",
-        }
-        thesis_text = (
-            f"핵심 거래 {total}건의 투자 근거를 사후 검증한 결과, "
-            f"실현 {realized}건·일부 실현 {partial}건·미실현 {not_realized}건입니다."
-        )
-        insight["thesisNarrative"] = thesis_text
-        insight["narrative"] = f"{insight.get('narrative', '')} {thesis_text}".strip()
-        # Evidence verification enriches the evaluation context only. It must
-        # not invent a new principle or a separate "good action" checklist.
 
     @staticmethod
     def _unconfirmed_thesis_outcome(status: str, summary: str) -> dict:
@@ -243,12 +212,10 @@ class SimulationReportGenerator:
         """Ask OpenAI only for prose; all classifications and numbers are immutable."""
         narrative_input = {
             "reportVersion": report.get("reportVersion"),
-            "decisionReviews": report.get("decisionReviews", [])[:20],
-            "evidenceReviews": report.get("evidenceReviews", [])[:20],
-            "learningInsights": report.get("learningInsights", {}),
+            "decisionReviews": report.get("decisionReviews", []),
+            "evidenceReviews": report.get("evidenceReviews", []),
             "principleEvaluationSummary": report.get("principleEvaluationSummary", {}),
             "principleEvaluations": report.get("principleEvaluations", []),
-            "principleReinforcements": report.get("principleReinforcements", []),
         }
         prompt = build_user_report_prompt(narrative_input)
 
@@ -292,7 +259,7 @@ class SimulationReportGenerator:
             for item in narratives.get("decisionNarratives", [])
             if isinstance(item, dict)
         }
-        for item in report["decisionReviews"]:
+        for item in report.get("decisionReviews", []):
             text = decision_text.get(str(item.get("tradeId")))
             if text:
                 item["narrative"] = text
@@ -303,7 +270,7 @@ class SimulationReportGenerator:
             for item in narratives.get("evidenceNarratives", [])
             if isinstance(item, dict)
         }
-        for item in report["evidenceReviews"]:
+        for item in report.get("evidenceReviews", []):
             text = evidence_text.get(str(item.get("tradeId")))
             if text:
                 item["narrative"] = text
@@ -325,7 +292,7 @@ class SimulationReportGenerator:
             for item in narratives.get("recommendationNarratives", [])
             if isinstance(item, dict)
         }
-        for item in report.get("principleReinforcements", []):
+        for item in cls._proposals(report):
             text = recommendation_text.get(str(item.get("recommendationId")))
             if text:
                 item["narrative"] = text
@@ -336,10 +303,7 @@ class SimulationReportGenerator:
             for item in narratives.get("principleProposals", [])
             if isinstance(item, dict)
         }
-        proposal_items = (
-            report.get("principleReinforcements", [])
-        )
-        for item in proposal_items:
+        for item in cls._proposals(report):
             proposal = proposal_text.get(str(item.get("opportunityId")))
             if not proposal:
                 continue

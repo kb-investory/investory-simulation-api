@@ -81,12 +81,11 @@ def accept_principle_proposal(
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
     if report.get("reportVersion") != REPORT_IDENTITY:
         raise HTTPException(status_code=409, detail="새 분석 버전의 리포트를 먼저 조회해 주세요.")
-    evaluation_suggestions = [
-        item.get("suggestion")
+    proposals = [
+        item["suggestion"]
         for item in report.get("principleEvaluations", [])
         if isinstance(item, dict) and isinstance(item.get("suggestion"), dict)
     ]
-    proposals = report.get("principleReinforcements", []) + evaluation_suggestions
     if req.evaluationId is None and req.recommendationId is None:
         raise HTTPException(status_code=422, detail="evaluationId 또는 recommendationId가 필요합니다.")
     proposal = None

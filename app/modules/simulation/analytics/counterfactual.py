@@ -96,29 +96,12 @@ def _performance(snapshots: List) -> tuple[Optional[float], Optional[float]]:
     return round(cumulative_return, 2), round(drawdown, 2)
 
 
-def _violated_trade_ids(evaluation: dict, decision_reviews: List[dict]) -> List[dict]:
-    """Collect the reviews whose match for this principle came out VIOLATED."""
-    principle_id = evaluation.get("principleSetItemId")
-    target_rule = evaluation.get("targetRule")
-    principle_text = evaluation.get("principleText")
-    violated = []
-    for review in decision_reviews:
-        for match in review.get("principleMatches", []):
-            if match.get("judgment") != "VIOLATED":
-                continue
-            same_principle = (
-                principle_id is not None
-                and match.get("principleSetItemId") == principle_id
-            ) or (
-                principle_id is None
-                and target_rule
-                and match.get("targetRule") == target_rule
-                and match.get("principleText") == principle_text
-            )
-            if same_principle:
-                violated.append(review)
-                break
-    return violated
+def _violating_trades(evaluation: dict) -> List[dict]:
+    """The trades this principle broke, as recorded when it was evaluated."""
+    return [
+        trade for trade in evaluation.get("violatingTrades") or []
+        if trade.get("tradeId") is not None
+    ]
 
 
 def _summary_text(difference: float, removed_count: int) -> str:
@@ -153,7 +136,6 @@ def build_principle_counterfactuals(
 ) -> int:
     """Attach a counterfactual to each evaluation, in place. Returns runs made."""
     evaluations = report.get("principleEvaluations") or []
-    decision_reviews = report.get("decisionReviews") or []
     if not evaluations or not actual_trades:
         return 0
 
@@ -161,7 +143,7 @@ def build_principle_counterfactuals(
     completed = 0
 
     for evaluation in evaluations:
-        violated_reviews = _violated_trade_ids(evaluation, decision_reviews)
+        violated_reviews = _violating_trades(evaluation)
         if not violated_reviews:
             evaluation["counterfactual"] = unsupported(
                 "NO_VIOLATION",

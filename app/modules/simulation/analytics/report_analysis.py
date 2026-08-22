@@ -202,21 +202,6 @@ def _participant_return(participants: List[dict], variant_type: str, variant_id:
     return round(float(value or 0.0), 2)
 
 
-def _learning_narrative(actual_return: float, principle_return: float, primary_text: str) -> str:
-    difference = round(principle_return - actual_return, 2)
-    if difference > 0:
-        comparison = f"원칙봇 수익률이 실제 투자보다 {difference:.2f}%p 높았습니다."
-    elif difference < 0:
-        comparison = f"실제 투자 수익률이 원칙봇보다 {abs(difference):.2f}%p 높았습니다."
-    else:
-        comparison = "실제 투자와 원칙봇의 수익률이 같았습니다."
-    return (
-        f"실제 투자 수익률은 {actual_return:.2f}%, "
-        f"원칙봇 수익률은 {principle_return:.2f}%로 {comparison} "
-        f"{primary_text}"
-    )
-
-
 def _clean_rationale(trade: dict) -> str:
     value = str(
         trade.get("rationaleText")
@@ -515,9 +500,8 @@ def _build_principle_evaluations(
     analytics: dict,
     rule_schema: dict,
     decision_reviews: List[dict],
-) -> tuple[List[dict], List[dict]]:
+) -> List[dict]:
     evaluations = []
-    reinforcements = []
     catalog = _principle_catalog(analytics, rule_schema)
 
     for index, principle in enumerate(catalog, 1):
@@ -685,7 +669,6 @@ def _build_principle_evaluations(
                     "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
                     "proposalSource": "DETERMINISTIC_FALLBACK",
                 }
-                reinforcements.append(suggestion)
 
         evaluations.append({
             "evaluationId": evaluation_id,
@@ -731,6 +714,13 @@ def _build_principle_evaluations(
                 if match.get("judgment") in {"FOLLOWED", "VIOLATED"}
             ][:20],
             "suggestion": suggestion,
+            # The counterfactual replay needs the trades this principle broke.
+            # Carrying them here keeps that input independent of how many
+            # decision reviews the report ends up delivering.
+            "violatingTrades": [
+                {"tradeId": review["tradeId"], "action": review["action"]}
+                for review in violated
+            ],
             # Replaced by a real replay when the run has the price data loaded.
             # Kept here so rebuilt reports keep the same shape.
             "counterfactual": {
@@ -742,7 +732,7 @@ def _build_principle_evaluations(
             "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
         })
 
-    return evaluations, reinforcements
+    return evaluations
 
 
 PERSONAL_BOT_VARIANT_ID = 2
@@ -887,26 +877,26 @@ def _outcome_branch(ranked: List[dict], review_summary: dict) -> str:
     personal = by_type.get("PERSONAL_BOT")
     if not ranked or (personal is not None and personal["tradeCount"] == 0):
         # A bot that never traded has a 0% line, not a comparable result.
-        return "INCONCLUSIVE"
+        return "UNKNOWN"
 
     winner = ranked[0]["variantType"]
     if winner == "RANDOM_BOT":
         return "MARKET_LUCK"
     if winner == "ACTUAL_USER":
         if review_summary.get("violatedCount", 0) >= 2:
-            return "USER_AHEAD_LUCKY"
-        return "USER_AHEAD_DISCIPLINED"
+            return "ACTUAL_AHEAD_WITH_VIOLATIONS"
+        return "ACTUAL_DISCIPLINED"
     if winner == "PERSONAL_BOT":
-        return "BOT_AHEAD"
+        return "PERSONAL_BOT_AHEAD"
     if winner == "FAMOUS_STRATEGY":
         return "REFERENCE_AHEAD"
     # A winner this function does not recognise must not fall through into a
     # story about some other participant. Say the comparison is unusable.
-    return "INCONCLUSIVE"
+    return "UNKNOWN"
 
 
 OUTCOME_COPY = {
-    "INCONCLUSIVE": (
+    "UNKNOWN": (
         "이번 회차는 비교할 수 없습니다",
         "원칙봇이 한 건도 매매하지 않아 순위를 견줄 수 없습니다. 원칙과 종목 데이터를 확인해 주세요.",
         "COVERAGE",
@@ -916,17 +906,17 @@ OUTCOME_COPY = {
         "무작위 매매가 1위였습니다. 이번 회차 수익률로는 원칙의 좋고 나쁨을 판단하지 마세요.",
         "PERFORMANCE_CONTEXT",
     ),
-    "USER_AHEAD_DISCIPLINED": (
+    "ACTUAL_DISCIPLINED": (
         "결과도 좋았고, 원칙도 지켰습니다",
         "직접 한 매매가 1위였고 원칙을 어긴 거래도 반복되지 않았습니다. 지금 방식을 유지할 근거가 있습니다.",
         "PRINCIPLE_EVALUATIONS",
     ),
-    "USER_AHEAD_LUCKY": (
+    "ACTUAL_AHEAD_WITH_VIOLATIONS": (
         "1위였지만, 원칙을 지켜서 얻은 결과는 아닙니다",
         "직접 한 매매가 1위였습니다. 다만 스스로 정한 기준을 반복해서 넘겼기 때문에 같은 방식이 반복되면 결과는 달라질 수 있습니다.",
         "PRINCIPLE_EVALUATIONS",
     ),
-    "BOT_AHEAD": (
+    "PERSONAL_BOT_AHEAD": (
         "원칙을 그대로 지킨 쪽이 앞섰습니다",
         "당신의 원칙만 따라 매매한 결과가 실제 매매보다 좋았습니다. 어디서 갈라졌는지 거래 단위로 확인해 보세요.",
         "DIVERGENCE",
@@ -1838,6 +1828,228 @@ def _principle_review_from_match(selected_match: Optional[dict], fallback: dict)
     }
 
 
+# 한 갈래만 화면에 나오므로, 그 갈래가 쓰지 않는 시나리오 객체는 null로 내려갑니다.
+BRANCH_SECTION = {
+    "divergenceReview": "PERSONAL_BOT_AHEAD",
+    "referenceReview": "REFERENCE_AHEAD",
+    "luckCheck": "MARKET_LUCK",
+}
+
+# 표본이 부족해 아직 아무 말도 할 수 없는 원칙은 화면에 올리지 않습니다.
+DELIVERED_VERDICTS = (
+    "KEEP", "EARLY_SIGNAL", "STRENGTHEN", "REVISE", "CONFIRM_THRESHOLD", "REVIEW",
+)
+
+
+def _judgment_reason(review: dict) -> str:
+    """Why this trade came out VIOLATED, in one sentence."""
+    principle_review = review.get("principleReview") or {}
+    violated = next(
+        (
+            match for match in review.get("principleMatches") or []
+            if match.get("judgment") == "VIOLATED"
+        ),
+        {},
+    )
+    return (
+        principle_review.get("violationReason")
+        or violated.get("reason")
+        or review.get("principleFeedback")
+        or ""
+    )
+
+
+def _delivered_review(review: dict) -> dict:
+    """One violated trade, as the review screen lists it."""
+    matched = review.get("matchedPrinciple") or {}
+    violated = next(
+        (
+            match for match in review.get("principleMatches") or []
+            if match.get("judgment") == "VIOLATED"
+        ),
+        {},
+    )
+    return {
+        "tradeId": review["tradeId"],
+        "tradedAt": review["tradedAt"],
+        "securityCode": review.get("securityCode") or "",
+        "securityName": review["securityName"],
+        "principleJudgment": "VIOLATED",
+        "matchedPrinciple": {
+            "principleSetItemId": (
+                matched.get("principleSetItemId") or violated.get("principleSetItemId")
+            ),
+            "principleText": (
+                matched.get("originalText")
+                or matched.get("title")
+                or violated.get("principleText")
+                or ""
+            ),
+        },
+        "judgmentReason": _judgment_reason(review),
+    }
+
+
+def _delivered_evaluation(evaluation: dict) -> dict:
+    suggestion = evaluation.get("suggestion")
+    statistics = evaluation.get("statistics") or {}
+    return {
+        "evaluationId": evaluation["evaluationId"],
+        "principleSetItemId": evaluation.get("principleSetItemId"),
+        "principleText": evaluation.get("principleText"),
+        "verdict": evaluation["verdict"],
+        "evaluationReason": evaluation.get("evaluationReason"),
+        "statistics": {
+            "followedCount": statistics.get("followedCount", 0),
+            "violatedCount": statistics.get("violatedCount", 0),
+        },
+        "suggestion": (
+            {"description": suggestion.get("description")}
+            if isinstance(suggestion, dict) and suggestion.get("description")
+            else None
+        ),
+    }
+
+
+def _delivered_divergence(review: dict) -> dict:
+    """Only the moments where the bot did better AND a principle was broken.
+
+    A moment without a named principle cannot explain anything, so listing it
+    would pad the count without adding a reason.
+    """
+    moments = [
+        {
+            "betterSide": moment["betterSide"],
+            "violatedPrinciples": [
+                {
+                    "principleSetItemId": item.get("principleSetItemId"),
+                    "principleText": item.get("principleText"),
+                    "reason": item.get("reason"),
+                }
+                for item in moment.get("violatedPrinciples") or []
+            ],
+        }
+        for moment in review.get("moments") or []
+        if moment.get("betterSide") == "PERSONAL_BOT" and moment.get("violatedPrinciples")
+    ]
+    # The count describes the list that ships with it, not the unfiltered one.
+    return {"momentCount": len(moments), "moments": moments}
+
+
+def _delivered_reference(review: dict) -> dict:
+    return {
+        "strategyName": review.get("strategyName"),
+        "missingSectionCount": review.get("missingSectionCount", 0),
+        "missingSections": [
+            {"section": item.get("section"), "sectionLabel": item.get("sectionLabel")}
+            for item in review.get("missingSections") or []
+        ],
+        "references": [
+            {
+                "referenceId": item.get("referenceId"),
+                "title": item.get("title"),
+                "description": item.get("description"),
+            }
+            for item in review.get("references") or []
+        ],
+        "disclaimer": review.get("disclaimer"),
+    }
+
+
+def _delivered_luck_check(luck_check: dict) -> dict:
+    return {
+        key: luck_check.get(key)
+        for key in (
+            "runCount", "profitableRunPercent", "medianReturnPercent",
+            "actualUserPercentile", "periodSummary", "disclaimer",
+        )
+    }
+
+
+def deliverable(report: dict) -> dict:
+    """The report as the result screen reads it.
+
+    Sections left out here are still produced and still stored; they are simply
+    not sent. Two consequences are deliberate:
+
+    * decisionReviews carries the violated trades only, while
+      principleReviewSummary keeps describing every trade that was judged. The
+      list is a subset of the summary, never a restatement of it.
+    * A scenario section is null unless its branch won, so the client never has
+      to decide which of four objects the screen is about.
+    """
+    # This runs on whatever came back from storage, including a report written
+    # by an earlier build, so every section is read defensively.
+    outcome = report.get("outcome") or {}
+    branch = outcome.get("branch") or "UNKNOWN"
+    divergence = report.get("divergenceReview") or {}
+    reference = report.get("referenceReview") or {}
+    luck_check = (report.get("performanceContext") or {}).get("luckCheck") or {}
+    summary = report.get("principleReviewSummary") or {}
+    metadata = report.get("generationMetadata") or {}
+    return {
+        "outcome": {
+            "branch": branch,
+            "winnerVariantType": outcome.get("winnerVariantType"),
+        },
+        "principleReviewSummary": {
+            key: summary.get(key, 0)
+            for key in ("followedCount", "violatedCount", "assessedTradeCount", "totalTradeCount")
+        },
+        "principleEvaluations": [
+            _delivered_evaluation(item)
+            for item in report.get("principleEvaluations") or []
+            if item.get("verdict") in DELIVERED_VERDICTS
+        ],
+        "decisionReviews": [
+            _delivered_review(review)
+            for review in report.get("decisionReviews") or []
+            if review.get("principleJudgment") == "VIOLATED"
+        ],
+        "divergenceReview": (
+            _delivered_divergence(divergence)
+            if branch == BRANCH_SECTION["divergenceReview"] and divergence
+            else None
+        ),
+        "referenceReview": (
+            _delivered_reference(reference)
+            if branch == BRANCH_SECTION["referenceReview"] and reference
+            else None
+        ),
+        "performanceContext": {
+            "luckCheck": (
+                _delivered_luck_check(luck_check)
+                if branch == BRANCH_SECTION["luckCheck"] and luck_check
+                else None
+            )
+        },
+        "generationMetadata": {
+            "narrativeStatus": metadata.get("narrativeStatus"),
+            "thesisVerificationStatus": metadata.get("thesisVerificationStatus"),
+        },
+    }
+
+
+def _is_verifiable(review: dict) -> bool:
+    """Whether this trade recorded a reason that can be checked afterwards."""
+    reason = str(review.get("decisionReason") or "").strip()
+    return bool(reason) and reason != "사용자가 입력한 매매 근거 없음"
+
+
+def _key_trade_sort_key(review: dict) -> tuple:
+    """Rank a trade by how well it can stand as a key trade.
+
+    A recorded rationale comes first because it is the only kind of trade whose
+    stated reason can be checked afterwards; a measured move comes next.
+    """
+    return (
+        _is_verifiable(review),
+        review.get("subsequentReturnPercent") is not None,
+        abs(float(review.get("subsequentReturnPercent") or 0.0)),
+        str(review.get("tradedAt") or ""),
+    )
+
+
 class DeterministicReportAnalyzer:
     """Create report judgments and evaluate the user's existing principles."""
 
@@ -1847,6 +2059,12 @@ class DeterministicReportAnalyzer:
         participant_summary: List[dict],
         analytics: Optional[dict] = None,
     ) -> dict:
+        """The complete analysis. This is what gets stored.
+
+        The response is narrower -- see `deliverable` -- but the stored report
+        keeps everything, because applying a strengthening proposal reads the
+        rule JSON and the report version back out of it.
+        """
         analytics = analytics or {}
         actual_trades = [trade for trade in simulated_trades if _variant_id(trade) in ACTUAL_VARIANT_IDS]
         prices_by_security: Dict[int, List[tuple[str, float]]] = defaultdict(list)
@@ -1858,6 +2076,11 @@ class DeterministicReportAnalyzer:
                 prices_by_security[security_id].append((price_date, close_price))
         for series in prices_by_security.values():
             series.sort(key=lambda item: item[0])
+        security_codes = {
+            int(item.get("securityId") or item.get("security_id") or 0):
+                item.get("securityCode") or item.get("security_code")
+            for item in analytics.get("securitySnapshots") or []
+        }
         pattern_by_trade_id: Dict[object, List[str]] = {}
         pattern_by_security: Dict[int, List[str]] = {}
         patterns = analytics.get("behaviorPatterns") or []
@@ -1984,6 +2207,11 @@ class DeterministicReportAnalyzer:
                 "tradeId": trade_id,
                 "tradedAt": trade.get("tradedAt") or trade_date,
                 "securityId": security_id,
+                "securityCode": (
+                    trade.get("securityCode")
+                    or trade.get("security_code")
+                    or security_codes.get(security_id)
+                ),
                 "securityName": trade.get("securityName") or trade.get("security_name") or f"종목 {security_id}",
                 "action": action,
                 "actionSummary": action,
@@ -2022,17 +2250,11 @@ class DeterministicReportAnalyzer:
             })
 
         decision_reviews.sort(key=lambda item: str(item.get("tradedAt") or ""), reverse=True)
-        key_trade_reviews = sorted(
-            decision_reviews,
-            key=lambda item: (
-                item.get("decisionReason") != "사용자가 입력한 매매 근거 없음",
-                item.get("subsequentReturnPercent") is not None,
-                abs(float(item.get("subsequentReturnPercent") or 0.0)),
-                str(item.get("tradedAt") or ""),
-            ),
-            reverse=True,
-        )[:3]
-        key_trade_ids = {item.get("tradeId") for item in key_trade_reviews}
+        # Both arrays stay complete: the violation summary and the trade
+        # review screens iterate all of them. Only a few trades are singled out
+        # as key trades, and that selection never removes anything.
+        key_trade_reviews = sorted(decision_reviews, key=_key_trade_sort_key, reverse=True)[:3]
+        key_trade_ids = {item["tradeId"] for item in key_trade_reviews}
         decision_by_trade_id = {item.get("tradeId"): item for item in decision_reviews}
 
         evidence_reviews = []
@@ -2069,39 +2291,6 @@ class DeterministicReportAnalyzer:
             })
         evidence_reviews.sort(key=lambda item: str(item.get("tradedAt") or ""), reverse=True)
 
-        security_evidence_reviews = []
-        actual_security_ids = sorted({int(item.get("securityId") or item.get("security_id") or 0) for item in actual_trades})
-        for security_id in actual_security_ids:
-            security_trades = [item for item in evidence_reviews if item["securityId"] == security_id]
-            price_series = [
-                {"date": price_date, "closePrice": close_price}
-                for price_date, close_price in prices_by_security.get(security_id, [])
-            ]
-            annotations = []
-            for review in [item for item in decision_reviews if item["securityId"] == security_id]:
-                annotations.append({
-                    "date": str(review.get("tradedAt") or "")[:10],
-                    "type": review["action"],
-                    "tradeId": review["tradeId"],
-                    "label": "매수" if review["action"] in {"BUY", "ADD"} else "매도",
-                })
-                for period_key, label in (("fiveTradingDays", "5거래일 평가"), ("twentyTradingDays", "20거래일 평가")):
-                    point = review.get("marketOutcome", {}).get(period_key, {})
-                    if point.get("evaluationDate"):
-                        annotations.append({
-                            "date": point["evaluationDate"],
-                            "type": "OUTCOME_CHECKPOINT",
-                            "tradeId": review["tradeId"],
-                            "label": label,
-                        })
-            security_evidence_reviews.append({
-                "securityId": security_id,
-                "securityName": security_trades[0]["securityName"] if security_trades else f"종목 {security_id}",
-                "evidenceReviews": security_trades,
-                "priceSeries": price_series,
-                "chartAnnotations": sorted(annotations, key=lambda item: (item["date"], str(item.get("tradeId") or ""))),
-            })
-
         principle_review_summary = {
             "followedCount": sum(item["principleJudgment"] == "FOLLOWED" for item in decision_reviews),
             "violatedCount": sum(item["principleJudgment"] == "VIOLATED" for item in decision_reviews),
@@ -2110,35 +2299,7 @@ class DeterministicReportAnalyzer:
             "totalTradeCount": len(decision_reviews),
         }
 
-        actual_return = _participant_return(participant_summary, "ACTUAL_USER", 1)
-        principle_return = _participant_return(participant_summary, "PERSONAL_BOT", 2)
-        underperformed = sum(
-            1 for item in decision_reviews
-            if item["subsequentReturnPercent"] is not None
-            and (
-                (item["action"] in {"BUY", "ADD"} and item["subsequentReturnPercent"] < 0)
-                or (item["action"] in {"SELL", "REDUCE"} and item["subsequentReturnPercent"] > 0)
-            )
-        )
-        primary_pattern = max(patterns, key=lambda item: int(item.get("count") or 0), default=None)
-        primary_text = (
-            str(primary_pattern.get("description") or primary_pattern.get("label"))
-            if primary_pattern
-            else "반복적으로 확인된 행동 패턴이 없습니다."
-        )
-        learning_insights = {
-            "primaryMistakePattern": primary_text,
-            "emotionalTradeCount": sum(item["emotionTag"] in PATTERN_CONFIG for item in decision_reviews),
-            "underperformedTradeCount": underperformed,
-            "actualReturnPercent": actual_return,
-            "principleReturnPercent": principle_return,
-            "returnImprovementPercentPoint": round(principle_return - actual_return, 2),
-            "calculationSource": "DETERMINISTIC_ANALYTICS",
-            "narrative": _learning_narrative(actual_return, principle_return, primary_text),
-            "narrativeSource": "DETERMINISTIC_TEMPLATE",
-        }
-
-        principle_evaluations, principle_reinforcements = _build_principle_evaluations(
+        principle_evaluations = _build_principle_evaluations(
             analytics,
             rule_schema,
             decision_reviews,
@@ -2193,19 +2354,23 @@ class DeterministicReportAnalyzer:
             "decisionReviews": decision_reviews,
             "keyTradeReviews": key_trade_reviews,
             "evidenceReviews": evidence_reviews,
-            "securityEvidenceReviews": security_evidence_reviews,
-            "learningInsights": learning_insights,
             "principleEvaluationSummary": principle_evaluation_summary,
             "principleEvaluations": principle_evaluations,
             "principleSetDiagnostics": principle_set_diagnostics,
             "performanceContext": performance_context,
-            "principleReinforcements": principle_reinforcements,
             "referenceReview": _build_reference_review(
                 principle_catalog, reference_principles, participant_summary
             ),
             "generationMetadata": {
                 "judgmentSource": "DETERMINISTIC_RULE_ENGINE",
                 "narrativeSource": "NOT_REQUESTED",
+                # 근거 검증은 리포트 생성 이후 단계라 여기서는 아직 시작되지 않은
+                # 상태로 둡니다. 프론트는 이 값만 보고 검증 UI를 켤지 정할 수 있습니다.
+                "thesisVerificationStatus": "NOT_RUN",
+                "thesisVerificationSource": "NONE",
+                "thesisVerificationTargetCount": len([
+                    review for review in key_trade_reviews if _is_verifiable(review)
+                ]),
                 "proposalSource": "DETERMINISTIC_FALLBACK",
                 "referencePrincipleSource": (
                     "SYSTEM_STRATEGY_CONFIG" if reference_principles else "NOT_AVAILABLE"

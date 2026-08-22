@@ -9,6 +9,15 @@ from app.modules.simulation.analytics.report_analysis import DeterministicReport
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
 
 
+def _suggestions(report: dict) -> list:
+    """Every strengthening proposal the report carries, in one place."""
+    return [
+        item["suggestion"]
+        for item in report.get("principleEvaluations", [])
+        if isinstance(item.get("suggestion"), dict)
+    ]
+
+
 class SimulationReportDeterminismTests(unittest.TestCase):
     def setUp(self):
         self.trades = [
@@ -98,13 +107,12 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
         self.assertEqual(report["evidenceReviews"][0]["basisType"], "UNKNOWN")
         self.assertEqual(report["evidenceReviews"][0]["confidenceScore"], 10)
-        self.assertEqual(report["learningInsights"]["actualReturnPercent"], 5.0)
-        self.assertIn("원칙봇 수익률이 실제 투자보다 7.00%p 높았습니다", report["learningInsights"]["narrative"])
-        self.assertEqual(report["learningInsights"]["narrativeSource"], "DETERMINISTIC_TEMPLATE")
-        self.assertEqual(report["learningInsights"]["principleReturnPercent"], 12.0)
-        self.assertEqual(report["learningInsights"]["returnImprovementPercentPoint"], 7.0)
+        self.assertEqual(report["performanceContext"]["actualReturnPercent"], 5.0)
+        self.assertEqual(report["performanceContext"]["principleReturnPercent"], 12.0)
         self.assertEqual(report["principleEvaluations"], [])
-        self.assertEqual(report["principleReinforcements"], [])
+        self.assertNotIn("securityEvidenceReviews", report)
+        self.assertNotIn("learningInsights", report)
+        self.assertNotIn("principleReinforcements", report)
 
     def test_llm_can_only_add_whitelisted_narratives(self):
         malicious_response = {
@@ -141,23 +149,25 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 analytics=self.analytics,
             )
 
-        self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
-        self.assertEqual(report["decisionReviews"][0]["subsequentReturnPercent"], -4.0)
-        self.assertEqual(report["learningInsights"]["actualReturnPercent"], 5.0)
-        self.assertEqual(report["principleReinforcements"], [])
+        self.assertEqual(report["decisionReviews"][0]["principleJudgment"], "NOT_APPLICABLE")
+        actual = next(
+            item for item in report["outcome"]["ranking"]
+            if item["variantType"] == "ACTUAL_USER"
+        )
+        self.assertEqual(actual["cumulativeReturnPercent"], 5.0)
+        self.assertEqual(report["principleEvaluations"], [])
         self.assertEqual(report["generationMetadata"]["narrativeSource"], "OPENAI")
         self.assertIn("narrative", report["decisionReviews"][0])
         self.assertIn("실제 매매 근거:", report["decisionReviews"][0]["principleFeedback"])
-        self.assertNotEqual(
-            report["learningInsights"]["narrative"],
-            malicious_response["learningNarrative"],
-        )
+        # A section the model tried to add is not a section the report gained.
+        self.assertNotIn("learningInsights", report)
         self.assertEqual(report["generationMetadata"]["narrativeStatus"], "COMPLETED")
 
     def test_web_search_verification_is_added_only_for_key_trades(self):
         generator = SimulationReportGenerator(api_key="configured-key")
+        trades = [dict(self.trades[0], decisionReason="2분기 실적이 개선될 것으로 판단")]
         report = generator.build_deterministic_report(
-            1, self.trades, self.participants, analytics=self.analytics,
+            1, trades, self.participants, analytics=self.analytics,
         )
         verified = {
             "verdict": "REALIZED",
@@ -177,28 +187,51 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         verifier.assert_called_once_with(enriched["keyTradeReviews"][0])
         self.assertEqual(enriched["keyTradeReviews"][0]["thesisOutcome"], verified)
         self.assertEqual(enriched["generationMetadata"]["thesisVerificationStatus"], "COMPLETED")
-        self.assertEqual(enriched["learningInsights"]["thesisOutcomeSummary"]["realizedTradeCount"], 1)
+        self.assertEqual(enriched["generationMetadata"]["thesisVerificationTargetCount"], 1)
+        self.assertEqual(enriched["generationMetadata"]["thesisVerificationCompletedCount"], 1)
+        # A key trade is the same object as its decisionReviews entry, so the
+        # verification UI can select on the field from the full array.
+        verified_trades = [
+            item for item in enriched["decisionReviews"] if item.get("thesisOutcome")
+        ]
+        self.assertEqual([item["tradeId"] for item in verified_trades], [11])
 
-    def test_unrealized_theses_add_insight_without_inventing_a_principle(self):
+    def test_a_trade_without_a_recorded_reason_gets_no_thesis_outcome(self):
+        generator = SimulationReportGenerator(api_key="configured-key")
+        report = generator.build_deterministic_report(
+            1, self.trades, self.participants, analytics=self.analytics,
+        )
+        with (
+            patch.object(generator, "_call_llm_for_narratives", return_value={}),
+            patch.object(generator, "_call_web_thesis_verifier") as verifier,
+        ):
+            enriched = generator.enrich_report(report)
+
+        # There is nothing to check against, so the trade carries no verdict at
+        # all rather than an empty one that would read as a failed check.
+        verifier.assert_not_called()
+        self.assertNotIn("thesisOutcome", enriched["keyTradeReviews"][0])
+        self.assertTrue(all("thesisOutcome" not in item for item in enriched["decisionReviews"]))
+        self.assertEqual(enriched["generationMetadata"]["thesisVerificationStatus"], "NOT_APPLICABLE")
+        self.assertEqual(enriched["generationMetadata"]["thesisVerificationTargetCount"], 0)
+
+    def test_verification_marks_the_evidence_without_inventing_a_principle(self):
         report = {
             "keyTradeReviews": [
-                {"thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "NOT_REALIZED"}},
-                {"thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "PARTIALLY_REALIZED"}},
+                {"tradeId": 1, "thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "NOT_REALIZED"}},
+                {"tradeId": 2, "thesisOutcome": {"verificationStatus": "COMPLETED", "verdict": "PARTIALLY_REALIZED"}},
             ],
-            "learningInsights": {"narrative": "기존 인사이트"},
-            "principleReinforcements": [],
+            "evidenceReviews": [{"tradeId": 1}, {"tradeId": 2}, {"tradeId": 3}],
+            "principleEvaluations": [],
         }
 
-        SimulationReportGenerator._apply_thesis_learning_and_principles(report)
+        SimulationReportGenerator._sync_evidence_verification(report)
 
-        self.assertEqual(report["learningInsights"]["thesisOutcomeSummary"], {
-            "assessedTradeCount": 2,
-            "realizedTradeCount": 0,
-            "partiallyRealizedTradeCount": 1,
-            "notRealizedTradeCount": 1,
-            "source": "OPENAI_WEB_SEARCH",
-        })
-        self.assertEqual(report["principleReinforcements"], [])
+        verdicts = {item["tradeId"]: item.get("webVerdict") for item in report["evidenceReviews"]}
+        self.assertEqual(verdicts, {1: "CONTRADICTED", 2: "PARTIAL", 3: None})
+        # Checking a stated reason says nothing about what the user's principles
+        # should be, so no proposal may appear as a side effect.
+        self.assertEqual(report["principleEvaluations"], [])
 
     def test_deterministic_report_does_not_wait_for_llm(self):
         generator = SimulationReportGenerator(api_key="configured-key")
@@ -213,22 +246,6 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         llm_call.assert_not_called()
         self.assertEqual(report["generationMetadata"]["narrativeStatus"], "PENDING")
         self.assertEqual(report["generationMetadata"]["narrativeSource"], "NOT_REQUESTED")
-        self.assertIn("원칙봇 수익률이 실제 투자보다 7.00%p 높았습니다", report["learningInsights"]["narrative"])
-
-    def test_learning_narrative_follows_negative_return_difference(self):
-        report = DeterministicReportAnalyzer().build(
-            self.trades,
-            [
-                {"variantId": 1, "variantType": "ACTUAL_USER", "cumulativeReturnPercent": -1.07},
-                {"variantId": 2, "variantType": "PERSONAL_BOT", "cumulativeReturnPercent": -5.12},
-            ],
-            self.analytics,
-        )
-
-        narrative = report["learningInsights"]["narrative"]
-        self.assertIn("실제 투자 수익률은 -1.07%", narrative)
-        self.assertIn("원칙봇 수익률은 -5.12%", narrative)
-        self.assertIn("실제 투자 수익률이 원칙봇보다 4.05%p 높았습니다", narrative)
 
     def test_review_sections_keep_all_trades_and_select_three_key_outcomes(self):
         trades = []
@@ -262,6 +279,13 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual([item["tradeId"] for item in report["evidenceReviews"]], [5, 4, 3, 2, 1])
         self.assertEqual(report["keyTradeReviews"][0]["decisionReason"], "DB에 기록된 매수 근거 4")
         self.assertEqual(report["keyTradeReviews"][0]["returnPercent"], 12.0)
+        # Selecting key trades must never take anything out of decisionReviews,
+        # which the violation summary and the review screens both iterate.
+        self.assertEqual(report["principleReviewSummary"]["totalTradeCount"], 5)
+        # A key trade is the very object delivered in decisionReviews, so a
+        # later verification writes the verdict once and both sections show it.
+        delivered = {item["tradeId"]: item for item in report["decisionReviews"]}
+        self.assertIs(report["keyTradeReviews"][0], delivered[4])
         evidence = next(item for item in report["evidenceReviews"] if item["tradeId"] == 4)
         self.assertEqual(evidence["basis"], "DB에 기록된 매수 근거 4")
         self.assertEqual(evidence["returnPercent"], 12.0)
@@ -405,7 +429,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 analytics=analytics,
             )
 
-        reinforcement = report["principleReinforcements"][0]
+        reinforcement = _suggestions(report)[0]
         self.assertEqual(reinforcement["currentValue"], 0.15)
         self.assertEqual(reinforcement["proposedValue"], 0.08)
         self.assertEqual(reinforcement["ruleJson"], {"entry": {"max_5day_return": 0.08}})
@@ -435,7 +459,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 analytics=self.analytics,
             )
 
-        self.assertEqual(report["principleReinforcements"], [])
+        self.assertEqual(_suggestions(report), [])
 
     def test_reinforcement_rejects_a_weaker_llm_threshold(self):
         trades, analytics = self._reinforcement_inputs()
@@ -459,7 +483,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
                 analytics=analytics,
             )
 
-        reinforcement = report["principleReinforcements"][0]
+        reinforcement = _suggestions(report)[0]
         # 0.18 is looser than the current 0.15, so the model's number is dropped
         # and the deterministic proposal stands.
         self.assertNotEqual(reinforcement["proposedValue"], 0.18)
@@ -481,8 +505,8 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             )
 
         self.assertEqual(report["generationMetadata"]["narrativeSource"], "TEMPLATE_FALLBACK")
-        self.assertEqual(report["decisionReviews"][0]["emotionTag"], "FOMO_BUY")
-        self.assertEqual(report["principleReinforcements"], [])
+        self.assertEqual(report["decisionReviews"][0]["tradeId"], 11)
+        self.assertEqual(_suggestions(report), [])
 
     def test_non_executable_rationale_prompt_is_only_an_improvement_action(self):
         report = DeterministicReportAnalyzer().build(
@@ -491,7 +515,7 @@ class SimulationReportDeterminismTests(unittest.TestCase):
             analytics={},
         )
 
-        self.assertEqual(report["principleReinforcements"], [])
+        self.assertEqual(_suggestions(report), [])
 
     def test_all_existing_principles_are_evaluated_and_only_repeated_violations_are_strengthened(self):
         trades, analytics = self._reinforcement_inputs()
@@ -870,9 +894,6 @@ class SimulationReportDeterminismTests(unittest.TestCase):
         self.assertEqual(report["principleReviewSummary"]["followedCount"], 2)
         self.assertEqual(report["principleReviewSummary"]["violatedCount"], 2)
         self.assertEqual(reviews[1]["matchedPrinciple"]["source"], "USER_PRINCIPLE")
-        security = next(item for item in report["securityEvidenceReviews"] if item["securityId"] == 1)
-        self.assertEqual(len(security["priceSeries"]), 6)
-        self.assertTrue(any(item["type"] == "OUTCOME_CHECKPOINT" for item in security["chartAnnotations"]))
 
     def test_web_search_and_evidence_judgment_are_separate_agents(self):
         generator = SimulationReportGenerator(api_key="configured-key")
