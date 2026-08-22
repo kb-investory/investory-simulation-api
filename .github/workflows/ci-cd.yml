@@ -86,24 +86,47 @@ jobs:
     permissions:
       contents: read
       packages: read
+      id-token: write
+
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/463680495848/locations/global/workloadIdentityPools/github-actions-pool/providers/github-actions-provider
+          service_account: deploy-bot@kbinvestory.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy via docker compose on GCP VM (IAP + OS Login)
         env:
           IMAGE: ${{ needs.build-and-push.outputs.image }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          port: ${{ secrets.DEPLOY_PORT }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: IMAGE,GHCR_TOKEN,GHCR_USER,DEPLOY_PATH
-          script: |
-            set -e
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            cd "$DEPLOY_PATH"
-            IMAGE="$IMAGE" docker compose pull
-            IMAGE="$IMAGE" docker compose up -d
-            docker image prune -f
+        run: |
+          gcloud compute ssh investory-api-simulation-server \
+            --project=kbinvestory \
+            --zone=asia-northeast3-c \
+            --tunnel-through-iap \
+            --command="
+              set -e
+              echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin
+              cd '${{ secrets.DEPLOY_PATH }}'
+              IMAGE='$IMAGE' docker compose pull
+              IMAGE='$IMAGE' docker compose up -d
+
+              ready=0
+              for i in \$(seq 1 30); do
+                if docker compose exec -T api python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=3)\" > /dev/null 2>&1; then
+                  ready=1
+                  break
+                fi
+                sleep 2
+              done
+              if [ \"\$ready\" -ne 1 ]; then
+                echo 'App did not become ready in time' >&2
+                docker compose logs --tail=50
+                exit 1
+              fi
+
+              docker image prune -f
+            "
