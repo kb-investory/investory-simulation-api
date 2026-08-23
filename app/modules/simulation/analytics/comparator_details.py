@@ -272,6 +272,9 @@ def _unavailable_personal_comparator(personal_bot_error: Optional[dict]) -> dict
     }
 
 
+from app.modules.simulation.engine.strategy_catalog import BUFFETT_REFERENCE_PRINCIPLES
+
+
 def build_comparators(
     bot: Optional[dict],
     principle_items: Optional[Iterable[dict]],
@@ -305,28 +308,29 @@ def build_comparators(
         },
         personal_comparator,
         {
-            "variantId": 3, "variantType": "FAMOUS_STRATEGY", "variantName": "우량 가치·품질 퀀트 봇",
-            "description": "재무·가격 데이터를 근거로 가치와 품질을 평가하는 비교 전략봇입니다.",
-            "fixed": False, "selectable": True, "className": "LEGEND", "level": "VALUE · QUALITY",
-            "traits": ["가치", "품질", "장기"], "strategyLabel": "LEGEND STRATEGY",
-            "versionLine": "가치·품질 전략 · 시장 데이터 기반",
-            "summary": "가치와 품질 팩터를 각각 40% 반영하고 평가 점수 75점 이상인 종목을 선택합니다.",
+            "variantId": 3, "variantType": "FAMOUS_STRATEGY", "variantName": "버핏식 우량기업 장기보유 봇",
+            "description": "버크셔 해서웨이 주주서한에 공개된 기준을 실행 규칙으로 옮긴 비교 전략봇입니다.",
+            "fixed": False, "selectable": True, "className": "LEGEND", "level": "QUALITY · LONG-TERM",
+            "traits": ["품질", "집중", "장기보유"], "strategyLabel": "LEGEND STRATEGY",
+            "versionLine": "버크셔 해서웨이 인수 기준 · 주주서한 근거",
+            "summary": "빚 없이 돈을 잘 버는 큰 기업만 골라 소수에 집중하고, 사업이 달라지기 전에는 팔지 않습니다.",
             "principles": [
-                {"principleId": None, "text": "시가총액 500억원, 일 거래대금 10억원 이상인 KOSPI·KOSDAQ 종목을 대상으로 한다.", "source": "SYSTEM_STRATEGY"},
-                {"principleId": None, "text": "가치와 품질을 우선 평가하고 종목당 최대 20%를 매수한다.", "source": "SYSTEM_STRATEGY"},
-                {"principleId": None, "text": "보유 수익률이 15% 이상이면 매도한다.", "source": "SYSTEM_STRATEGY"},
+                {"principleId": None, "text": item["title"] + ". " + item["description"], "source": "SYSTEM_STRATEGY"}
+                for item in BUFFETT_REFERENCE_PRINCIPLES
             ],
             "rules": [
                 _rule("universe.allowedMarkets", "투자 시장", "KOSPI·KOSDAQ", ["KOSPI", "KOSDAQ"]),
-                _rule("universe.minMarketCap", "최소 시가총액", "500억원 이상", 50_000_000_000, "KRW"),
-                _rule("universe.minDailyTradingValue", "최소 일 거래대금", "10억원 이상", 1_000_000_000, "KRW"),
-                _rule("selection.factorWeights", "평가 비중", "가치 40% · 품질 40% · 성장 20%", ["value=0.4", "quality=0.4", "growth=0.2"], "ratio"),
-                _rule("selection.minPassingScore", "최소 평가 점수", "75점 이상", 75, "점"),
-                _rule("entry.max5dayReturn", "단기 급등 제한", "5거래일 수익률 15% 이하", 0.15, "ratio"),
-                _rule("portfolio.targetWeight", "종목 목표 비중", "최대 20%", 0.2, "ratio"),
-                _rule("exit.takeProfitRate", "매도 기준", "+15%", 0.15, "ratio"),
+                _rule("universe.minMarketCap", "최소 시가총액", "1조원 이상", 1_000_000_000_000, "KRW"),
+                _rule("universe.minDailyTradingValue", "최소 일 거래대금", "50억원 이상", 5_000_000_000, "KRW"),
+                _rule("selection.factorWeights", "평가 비중", "품질 50% · 가치 30% · 실적 20%", ["quality=0.5", "value=0.3", "growth=0.2"], "ratio"),
+                _rule("selection.minPassingScore", "최소 평가 점수", "80점 이상", 80, "점"),
+                _rule("entry.max5dayReturn", "단기 급등 제한", "5거래일 수익률 5% 이하", 0.05, "ratio"),
+                _rule("portfolio.maxPositionCount", "보유 종목 수", "5종목 이내", 5, "개"),
+                _rule("portfolio.maxSinglePositionWeight", "한 종목 최대 비중", "35%", 0.35, "ratio"),
+                _rule("exit.maxHoldingDays", "최대 보유 기간", "10년", 3650, "일"),
+                _rule("exit.takeProfitRate", "목표 수익 매도", "두지 않음", 1.0, "ratio"),
             ],
-            "dataEvidence": {"title": "시장·재무 데이터를 사용해요", "summary": f"분석 가능 종목 {security_count}개 · 가치·품질 팩터 적용", "source": "SYSTEM_CONFIG", "updatedAt": system_updated, "analyzedSecurityCount": security_count, "strategyCount": 1},
+            "dataEvidence": {"title": "공개된 투자 기준을 사용해요", "summary": f"버크셔 해서웨이 주주서한 근거 · 분석 가능 종목 {security_count}개", "source": "SYSTEM_CONFIG", "updatedAt": system_updated, "analyzedSecurityCount": security_count, "strategyCount": 1},
             "personalBotId": None, "botVersion": "v1.0", "confidencePercent": None, "profileSource": None,
             "availability": "AVAILABLE", "unavailableReason": None,
         },

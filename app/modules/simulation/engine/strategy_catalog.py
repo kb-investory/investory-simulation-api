@@ -90,9 +90,8 @@ BUFFETT_REFERENCE_PRINCIPLES = (
         "referenceId": "REF_QUALITY_OVER_PRICE",
         "title": "사업의 질을 값보다 먼저 본다",
         "description": (
-            "자기자본이익률이 높으면서 빚을 거의 쓰지 않는 기업만 후보로 봅니다. "
-            "종목 평가에서 품질 50%, 가치 30%, 실적 지속성 20%를 반영하고 "
-            "80점 이상일 때만 검토합니다."
+            "빚 없이 돈을 잘 버는 기업만 봅니다. 품질 50%, 가치 30%, 실적 20%로 "
+            "매겨 80점을 넘어야 후보에 올립니다."
         ),
         "sourceQuote": "businesses earning good returns on equity while employing little or no debt",
         "sourceLabel": "버크셔 해서웨이 인수 기준",
@@ -106,8 +105,8 @@ BUFFETT_REFERENCE_PRINCIPLES = (
         "referenceId": "REF_FOREVER_HOLDING",
         "title": "좋은 기업은 오래 들고 간다",
         "description": (
-            "수익률이 얼마가 되었다고 팔지 않습니다. 파는 이유는 사업이 달라졌을 때뿐입니다. "
-            "최대 보유 기간을 10년으로 두고, 목표 수익률이나 손절선으로 자동 매도하지 않습니다."
+            "몇 % 올랐다고 팔지 않습니다. 파는 이유는 사업이 달라졌을 때뿐이라 "
+            "목표가도 손절선도 두지 않습니다."
         ),
         "sourceQuote": "our favorite holding period is forever",
         "sourceLabel": "1988년 주주서한",
@@ -126,8 +125,8 @@ BUFFETT_REFERENCE_PRINCIPLES = (
         "referenceId": "REF_CONCENTRATION",
         "title": "확신이 있는 소수에 집중한다",
         "description": (
-            "잘 아는 소수 기업에만 의미 있는 비중을 싣습니다. "
-            "보유 종목은 5개 이내로 두고, 한 종목에 최대 35%까지 허용합니다."
+            "아는 기업 몇 개에만 크게 싣습니다. 보유는 5종목 이내, "
+            "한 종목에 최대 35%까지 허용합니다."
         ),
         "sourceQuote": (
             "we continue to concentrate our investments in a very few companies "
@@ -149,8 +148,8 @@ BUFFETT_REFERENCE_PRINCIPLES = (
         "referenceId": "REF_LARGE_ESTABLISHED",
         "title": "규모가 검증된 기업만 본다",
         "description": (
-            "실적이 이미 증명된 큰 기업만 검토합니다. 시가총액 1조원 이상, "
-            "일 거래대금 50억원 이상인 종목으로 후보를 좁힙니다."
+            "실적이 이미 증명된 큰 기업만 봅니다. 시가총액 1조원, "
+            "일 거래대금 50억원이 최소선입니다."
         ),
         "sourceQuote": "large purchases … demonstrated consistent earning power",
         "sourceLabel": "버크셔 해서웨이 인수 기준",
