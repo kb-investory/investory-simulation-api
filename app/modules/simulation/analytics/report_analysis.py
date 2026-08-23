@@ -534,9 +534,19 @@ def _build_principle_evaluations(
             for rule_result in match.get("ruleResults") or []:
                 if rule_result.get("judgment") == "VIOLATED" and rule_result.get("targetRule"):
                     violation_counts[str(rule_result["targetRule"])] += 1
+        # 한 원칙에 여러 규칙이 묶여 있을 때, 위반이 가장 많은 규칙을 고르면
+        # 익절 원칙에 손절 제안이 붙는 일이 생깁니다. 원칙이 rule_json으로 직접
+        # 선언한 규칙이 있으면 그 안에서만 고릅니다.
+        declared_rules = set(_rule_paths(principle.get("currentRuleJson") or {}))
+        if not declared_rules and target_rule:
+            declared_rules = {target_rule}
+        own_violations = {
+            rule: count for rule, count in violation_counts.items()
+            if not declared_rules or rule in declared_rules
+        }
         suggestion_rule = (
-            max(violation_counts.items(), key=lambda item: (item[1], item[0]))[0]
-            if violation_counts
+            max(own_violations.items(), key=lambda item: (item[1], item[0]))[0]
+            if own_violations
             else target_rule
         )
         suggestion_value = next(
@@ -1917,8 +1927,13 @@ def _delivered_divergence(review: dict) -> dict:
     A moment without a named principle cannot explain anything, so listing it
     would pad the count without adding a reason.
     """
+    # 이 화면은 "어디서 원칙을 어겼나"를 보여줍니다. 원칙을 어긴 시점인데
+    # 그날 누가 더 나았느냐로 걸러내면, 위반 거래 수와 순간 수가 어긋납니다.
+    # 어느 쪽이 나았는지는 각 순간이 그대로 들고 갑니다.
     moments = [
         {
+            "date": moment.get("date"),
+            "securityName": moment.get("securityName"),
             "betterSide": moment["betterSide"],
             "violatedPrinciples": [
                 {
@@ -1930,7 +1945,7 @@ def _delivered_divergence(review: dict) -> dict:
             ],
         }
         for moment in review.get("moments") or []
-        if moment.get("betterSide") == "PERSONAL_BOT" and moment.get("violatedPrinciples")
+        if moment.get("violatedPrinciples")
     ]
     # The count describes the list that ships with it, not the unfiltered one.
     return {"momentCount": len(moments), "moments": moments}
