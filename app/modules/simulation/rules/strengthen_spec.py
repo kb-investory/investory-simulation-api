@@ -314,6 +314,52 @@ def _numeric_proposal(spec: dict, current_value, followed_values: List[float]) -
     return round(proposed, 6), basis
 
 
+# 마지막 글자의 받침에 따라 조사가 달라집니다. 값에는 숫자와 %가 섞여 오므로
+# 읽는 소리를 기준으로 판단합니다. "15%"는 "십오 퍼센트", "5개"는 "오 개"입니다.
+_DIGIT_FINAL = {"0": True, "1": True, "3": True, "6": True, "7": True, "8": True,
+                "2": False, "4": False, "5": False, "9": False}
+
+
+def _final_consonant(text: str):
+    """(받침 있음, 받침이 ㄹ인가). 판단할 글자가 없으면 None."""
+    for ch in reversed(str(text).strip()):
+        if "가" <= ch <= "힣":
+            code = (ord(ch) - 0xAC00) % 28
+            return code != 0, code == 8
+        if ch.isdigit():
+            return _DIGIT_FINAL[ch], ch in ("1", "7", "8")
+        if ch == "%":            # 퍼센트
+            return False, False
+        if ch.isalpha():
+            return True, False
+    return None
+
+
+def _josa(word: str, with_final: str, without_final: str) -> str:
+    state = _final_consonant(word)
+    if state is None:
+        return with_final
+    return with_final if state[0] else without_final
+
+
+def eul(word: str) -> str:
+    """을 / 를"""
+    return f"{word}{_josa(word, '을', '를')}"
+
+
+def eun(word: str) -> str:
+    """은 / 는"""
+    return f"{word}{_josa(word, '은', '는')}"
+
+
+def euro(word: str) -> str:
+    """으로 / 로 — 받침이 ㄹ이면 '로'를 씁니다."""
+    state = _final_consonant(word)
+    if state is None or not state[0] or state[1]:
+        return f"{word}로"
+    return f"{word}으로"
+
+
 def build_strengthen_proposal(
     target_rule: str,
     current_value,
@@ -351,14 +397,17 @@ def build_strengthen_proposal(
                 "proposedValue": current_value,
                 "valueBasis": basis,
                 "description": (
-                    f"{spec['label']}은(는) 이미 {format_value(current_value, unit)}으로 "
-                    "더 조일 여지가 없습니다. 주문 전에 이 기준을 실제로 확인합니다."
+                    f"{eun(spec['label'])} 이미 {euro(format_value(current_value, unit))} "
+                    "더 조일 곳이 없습니다. 주문 전에 지키는지만 확인하세요."
                 ),
             }
+        # 화면에 한 줄로 들어가야 해서 짧게 씁니다. 다만 이 수치가 어디서
+        # 나왔는지는 남깁니다 -- 표본이 적어 임의로 조인 값을 근거 있는 값처럼
+        # 보이게 하면 안 됩니다.
         evidence_sentence = (
-            "원칙을 지킨 거래들이 실제로 머문 구간을 기준으로 삼았습니다."
+            "지킨 거래들이 머문 구간 기준입니다."
             if basis == "FOLLOWED_TRADE_DISTRIBUTION"
-            else "지킨 거래 표본이 부족해 현재 기준에서 한 단계 조였습니다."
+            else "표본이 적어 한 단계만 조였습니다."
         )
         return {
             **common,
@@ -366,8 +415,8 @@ def build_strengthen_proposal(
             "proposedValue": proposed,
             "valueBasis": basis,
             "description": (
-                f"{spec['label']}을(를) {format_value(current_value, unit)}에서 "
-                f"{format_value(proposed, unit)}으로 조입니다. {evidence_sentence}"
+                f"{eul(spec['label'])} {format_value(current_value, unit)} → "
+                f"{euro(format_value(proposed, unit))} 조입니다. {evidence_sentence}"
             ),
         }
 
@@ -379,9 +428,7 @@ def build_strengthen_proposal(
                 "changeType": "ENFORCEMENT_REINFORCEMENT",
                 "proposedValue": current_value,
                 "valueBasis": "ALREADY_AT_LIMIT",
-                "description": (
-                    f"{spec['label']}은(는) 이미 켜져 있습니다. 주문 전에 이 조건을 실제로 확인합니다."
-                ),
+                "description": f"{eun(spec['label'])} 이미 켜져 있습니다. 주문 전에 확인하세요.",
             }
         return {
             **common,
@@ -389,8 +436,8 @@ def build_strengthen_proposal(
             "proposedValue": strict_value,
             "valueBasis": "RULE_DEFINITION",
             "description": (
-                f"{spec['label']}을(를) '{format_value(current_value, 'BOOLEAN')}'에서 "
-                f"'{format_value(strict_value, 'BOOLEAN')}'으로 바꿉니다."
+                f"{eul(spec['label'])} '{format_value(current_value, 'BOOLEAN')}' → "
+                f"{euro(chr(39) + format_value(strict_value, 'BOOLEAN') + chr(39))} 바꿉니다."
             ),
         }
 
@@ -404,7 +451,7 @@ def build_strengthen_proposal(
                 "changeType": "ENFORCEMENT_REINFORCEMENT",
                 "proposedValue": current_value,
                 "valueBasis": "ALREADY_AT_LIMIT",
-                "description": f"{spec['label']}은(는) 이미 가장 엄격한 단계입니다. 주문 전에 실제로 확인합니다.",
+                "description": f"{eun(spec['label'])} 이미 가장 엄격한 단계입니다. 주문 전에 확인하세요.",
             }
         proposed = ladder[index + 1]
         return {
@@ -412,7 +459,10 @@ def build_strengthen_proposal(
             "changeType": "CONDITION_TIGHTENED",
             "proposedValue": proposed,
             "valueBasis": "RULE_LADDER",
-            "description": f"{spec['label']}을(를) '{current_text}'에서 '{proposed}'로 한 단계 올립니다.",
+            "description": (
+                f"{eul(spec['label'])} '{current_text}' → "
+                f"{euro(chr(39) + proposed + chr(39))} 한 단계 올립니다."
+            ),
         }
 
     return {
