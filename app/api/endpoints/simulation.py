@@ -4,7 +4,7 @@
 ================================================================================
 ■ 프론트엔드 대응 엔드포인트 (8종 완전 매핑):
   1. GET  /simulation/overview                        : 시뮬레이션 개요 조회 (대응 화면: xCJcT, WYSMi)
-  2. POST /simulation/bots/compile                     : 최신 원칙 봇 생성/컴파일 요청 (대응 화면: Inbqv)
+  2. POST /simulation/bots/compile                     : 최신 원칙 봇 생성/컴파일 요청 (비동기, 대응 화면: Inbqv)
   3. GET  /simulation/bots/compile-jobs/{jobId}        : 봇 생성 상태 조회 (대응 화면: Inbqv, AZCR3)
   4. GET  /simulation/bots/comparators                 : 비교 기준 봇 목록 조회 (대응 화면: Huymt)
   5. POST /simulation/run                              : 시뮬레이션 실행 (대응 화면: y9DNLy)
@@ -71,6 +71,11 @@ ANALYTICS_RESPONSE_FIELDS = (
     "dailyPerformance",
 )
 COMPILE_JOB_CACHE: Dict[str, dict] = {}
+COMPILE_LOCK = Lock()
+# At most one in-flight compile per user — a second POST while one is still
+# running (e.g. an impatient retry click) reuses the same job instead of
+# kicking off a duplicate LLM call (#22).
+COMPILE_IN_PROGRESS: Dict[int, str] = {}
 REPORT_NARRATIVE_LOCK = Lock()
 REPORT_NARRATIVE_IN_PROGRESS: set[int] = set()
 
@@ -317,10 +322,16 @@ def calculate_initial_capital(
 # 2. 최신 원칙 봇 생성 요청 (대응 화면: Inbqv)
 # ==============================================================================
 @router.post("/bots/compile", summary="2. 최신 원칙 봇 생성/컴파일 요청")
-def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_current_user_id)):
+def compile_simulation_bot(
+    req: RuleCompileRequest,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(get_current_user_id),
+):
     """
     [대응 화면: Inbqv]
     - 사용자의 자연어 투자 원칙과 6축 성향을 수신하여 8대 영역 표준 Rule JSON 봇을 컴파일 생성합니다.
+    - LLM 호출(최대 REASONING_LLM_TIMEOUT=120초)은 백그라운드로 넘어가며, 이 응답은
+      즉시 job_id만 반환합니다. 실제 결과는 GET /bots/compile-jobs/{jobId}로 폴링합니다 (#22).
     """
     try:
         repository = SimulationRepository()
@@ -340,6 +351,8 @@ def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_c
         input_hash = compiler.build_input_fingerprint(principles, profile, actual_trades)
         existing_bot = repository.find_compiled_personal_bot_by_input_hash(user_id, input_hash)
         if existing_bot:
+            # A cache hit is a fast DB lookup, not an LLM call — no reason to
+            # make the caller poll for something that's already known.
             compilation_metadata = dict(existing_bot.get("ruleCompilation") or {})
             compilation_metadata.update({
                 "reusedCompiledBot": True,
@@ -355,6 +368,77 @@ def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_c
                 compilation_metadata=compilation_metadata,
                 account_id=account_id,
             )
+
+        with COMPILE_LOCK:
+            in_progress_job_id = COMPILE_IN_PROGRESS.get(user_id)
+        if in_progress_job_id:
+            in_progress = COMPILE_JOB_CACHE.get(in_progress_job_id) or {}
+            return {
+                "jobId": in_progress_job_id,
+                "status": in_progress.get("status", "RUNNING"),
+                "progressPercent": in_progress.get("progressPercent", 10),
+                "message": "이미 진행 중인 투자봇 생성 작업이 있습니다.",
+            }
+
+        job_id = f"JOB_{uuid.uuid4().hex[:8].upper()}"
+        COMPILE_JOB_CACHE[job_id] = {
+            "jobId": job_id,
+            "status": "RUNNING",
+            "progressPercent": 10,
+        }
+        with COMPILE_LOCK:
+            COMPILE_IN_PROGRESS[user_id] = job_id
+
+        background_tasks.add_task(
+            _compile_personal_bot_in_background,
+            job_id,
+            user_id,
+            principles,
+            profile,
+            actual_trades,
+            account_id,
+            principle_items,
+            input_hash,
+        )
+        return {
+            "jobId": job_id,
+            "status": "RUNNING",
+            "progressPercent": 10,
+            "message": "투자봇을 생성하고 있습니다.",
+        }
+    except SimulationDataError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": error.code, "message": error.message, "details": error.details},
+        )
+    except Exception as e:
+        raise internal_server_error(
+            logger,
+            e,
+            code="RULE_COMPILATION_INTERNAL_ERROR",
+            message="원칙 봇을 생성하는 중 서버 오류가 발생했습니다.",
+        ) from e
+
+
+def _compile_personal_bot_in_background(
+    job_id: str,
+    user_id: int,
+    principles: List[str],
+    profile: dict,
+    actual_trades: List[dict],
+    account_id: int,
+    principle_items: List[dict],
+    input_hash: str,
+) -> None:
+    """Run the actual LLM compile off the request/response cycle.
+
+    Never raises: this runs after the HTTP response is already gone, so every
+    failure has to land in COMPILE_JOB_CACHE as a FAILED status for the next
+    poll to see, instead of an exception nobody is left to catch.
+    """
+    repository = SimulationRepository()
+    try:
+        compiler = AIRuleCompiler()
         schema = compiler.compile(principles, profile, actual_trades)
         compiler.last_compilation_metadata["inputHash"] = input_hash
         saved_bot = repository.save_compiled_personal_bot(
@@ -366,9 +450,7 @@ def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_c
         )
         # DB의 createdAt까지 다시 읽어 comparator 조회와 완전히 같은 상세 응답을 만듭니다.
         saved_bot = repository.load_compiled_personal_bot(user_id, saved_bot["personalBotId"])
-        job_id = f"JOB_{uuid.uuid4().hex[:8].upper()}"
-
-        return _completed_compile_response(
+        _completed_compile_response(
             repository,
             user_id,
             job_id,
@@ -377,24 +459,33 @@ def compile_simulation_bot(req: RuleCompileRequest, user_id: int = Depends(get_c
             compile_cache_hit=False,
             compilation_metadata=compiler.last_compilation_metadata,
             account_id=account_id,
-        )
-    except SimulationDataError as error:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": error.code, "message": error.message, "details": error.details},
-        )
+        )  # writes the COMPLETED result into COMPILE_JOB_CACHE[job_id] itself
     except RuleCompilationError as error:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": error.code, "message": error.message, "fallbackUsed": False},
+        COMPILE_JOB_CACHE[job_id] = {
+            "jobId": job_id,
+            "status": "FAILED",
+            "progressPercent": 100,
+            "error": {"code": error.code, "message": error.message, "fallbackUsed": False},
+        }
+    except Exception as error:
+        logger.error(
+            "Background bot compilation failed for job %s",
+            job_id,
+            exc_info=error,
         )
-    except Exception as e:
-        raise internal_server_error(
-            logger,
-            e,
-            code="RULE_COMPILATION_INTERNAL_ERROR",
-            message="원칙 봇을 생성하는 중 서버 오류가 발생했습니다.",
-        ) from e
+        COMPILE_JOB_CACHE[job_id] = {
+            "jobId": job_id,
+            "status": "FAILED",
+            "progressPercent": 100,
+            "error": {
+                "code": "RULE_COMPILATION_INTERNAL_ERROR",
+                "message": "원칙 봇을 생성하는 중 서버 오류가 발생했습니다.",
+            },
+        }
+    finally:
+        with COMPILE_LOCK:
+            if COMPILE_IN_PROGRESS.get(user_id) == job_id:
+                COMPILE_IN_PROGRESS.pop(user_id, None)
 
 
 # ==============================================================================
@@ -425,6 +516,8 @@ def get_compile_job_status(job_id: str, user_id: int = Depends(get_current_user_
             result = None
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "COMPILE_JOB_NOT_FOUND", "message": "컴파일 작업을 찾을 수 없습니다."})
+    if result.get("status") != "COMPLETED":
+        return result
     return {**result, "message": "AI 원칙 봇 전략 생성이 완료되었습니다."}
 
 

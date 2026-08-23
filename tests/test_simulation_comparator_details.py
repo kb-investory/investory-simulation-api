@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from app.api.endpoints.simulation import (
     COMPILE_JOB_CACHE,
@@ -162,7 +162,7 @@ class SimulationComparatorDetailTests(unittest.TestCase):
 
     @patch("app.api.endpoints.simulation.SimulationRepository", return_value=FakeRepository())
     def test_completed_compile_detail_matches_comparator_and_polling(self, repository_class):
-        compiled = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), user_id=1)
+        compiled = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), BackgroundTasks(), user_id=1)
         comparators = get_comparator_bots(personalBotId="PBOT_1003", user_id=1)
         polled = get_compile_job_status(compiled["jobId"], user_id=1)
 
