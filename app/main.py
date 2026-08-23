@@ -32,15 +32,6 @@ app = FastAPI(
 )
 
 
-# CORS 설정 (프론트엔드 연동)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 @app.middleware("http")
 async def prometheus_metrics_middleware(request: Request, call_next):
     started = perf_counter()
@@ -136,3 +127,19 @@ def health_check():
 @app.get("/metrics", summary="프로메테우스 메트릭")
 def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+# CORS 설정 (프론트엔드 연동)
+#
+# 일부러 app.add_middleware(CORSMiddleware, ...) 대신 앱 전체를 감싸는 방식을 쓴다.
+# Starlette는 Exception/500 처리(ServerErrorMiddleware)를 사용자가 등록한 모든
+# 미들웨어보다 바깥에 둔다 — 그래서 add_middleware로 넣은 CORS는 핸들링되지 않은
+# 예외로 500이 나가는 응답에는 헤더를 못 붙인다. 이 경우 브라우저는 실제 500을
+# "CORS 정책에 의해 차단됨"으로 보여줘서 진짜 원인을 가린다. ASGI 레벨에서 앱을
+# 감싸면 ServerErrorMiddleware가 만드는 500 응답에도 CORS 헤더가 정상적으로 붙는다.
+app = CORSMiddleware(
+    app,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
