@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import BackgroundTasks
+
 from app.api.endpoints.simulation import compile_simulation_bot
 from app.api.endpoints.simulation_helpers import RuleCompileRequest
 
@@ -27,7 +29,7 @@ class CompiledBotIdempotencyTests(unittest.TestCase):
             "ruleCompilation": {"source": "OPENAI", "model": "gpt-4o-mini"},
         }
 
-        response = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), user_id=1)
+        response = compile_simulation_bot(RuleCompileRequest(actualTrades=[]), BackgroundTasks(), user_id=1)
 
         compile_call.assert_not_called()
         repository.save_compiled_personal_bot.assert_not_called()
