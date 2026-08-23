@@ -9,15 +9,18 @@
 """
 
 from datetime import datetime, timezone
+from time import perf_counter
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
 from app.api.router import api_router
+from app.core.metrics import HTTP_REQUEST_LATENCY_SECONDS, HTTP_REQUESTS_TOTAL
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -37,6 +40,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def prometheus_metrics_middleware(request: Request, call_next):
+    started = perf_counter()
+    response = await call_next(request)
+    # 라우팅 후에만 request.scope["route"]가 채워지므로, 매칭된 라우트의 path
+    # 템플릿(예: "/simulations/{simulation_run_id}")을 label로 써서 path 파라미터마다
+    # 별도 시계열이 생기는 카디널리티 폭발을 피한다. 매칭 실패(404 등)는 raw path로 남긴다.
+    route = request.scope.get("route")
+    path = route.path if route is not None else request.url.path
+    labels = (request.method, path, str(response.status_code))
+    HTTP_REQUESTS_TOTAL.labels(*labels).inc()
+    HTTP_REQUEST_LATENCY_SECONDS.labels(*labels).observe(perf_counter() - started)
+    return response
+
 
 def _error_body(error_code: str, message: str, field_errors=None) -> dict:
     """The single error shape every endpoint answers with."""
@@ -114,3 +132,7 @@ def health_check():
         "compiler_model": settings.COMPILER_MODEL,
         "disclosure_model": settings.DISCLOSURE_MODEL
     }
+
+@app.get("/metrics", summary="프로메테우스 메트릭")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
