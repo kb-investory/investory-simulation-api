@@ -1049,11 +1049,27 @@ class SimulationRepository:
                     (account_id,),
                 )
                 first_snapshot = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT MIN(traded_at) FROM trades WHERE account_id = %s",
+                    (account_id,),
+                )
+                first_trade_row = cur.fetchone()
+                first_trade = first_trade_row[0] if first_trade_row else None
+
+                # A snapshot isn't the only usable anchor anymore — an account
+                # with real trades but no snapshot can still reconstruct an
+                # initial state via trade_matches (see load_initial_snapshot),
+                # so either source unlocks the same runnable window.
+                anchor_candidates = [
+                    value.date() if isinstance(value, datetime) else value
+                    for value in (first_snapshot, first_trade)
+                    if value is not None
+                ]
                 first_runnable_date = None
-                if first_snapshot:
+                if anchor_candidates:
                     cur.execute(
                         "SELECT MIN(price_date) FROM security_daily_prices WHERE price_date > %s",
-                        (first_snapshot,),
+                        (min(anchor_candidates),),
                     )
                     first_runnable_date = cur.fetchone()[0]
         finally:
