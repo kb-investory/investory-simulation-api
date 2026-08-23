@@ -1075,16 +1075,14 @@ class SimulationRepository:
         finally:
             conn.close()
 
-        journal_start = journal[0] if journal and journal[0] else None
-        journal_end = journal[1] if journal and journal[1] else None
-        eligible_start = max(
-            (value for value in (journal_start, first_runnable_date) if value is not None),
-            default=None,
-        )
-        eligible_end = min(
-            (value for value in (journal_end, prices[1] if prices else None) if value is not None),
-            default=None,
-        )
+        # Journal entries are informational only (shown as an evidence count),
+        # never read by principle evaluation, report generation, or the
+        # backtest — so they must not narrow the runnable window. What the
+        # simulation actually needs is exactly what load_initial_snapshot()
+        # requires: an anchor (snapshot or trade) before period_start, which
+        # first_runnable_date already accounts for.
+        eligible_start = first_runnable_date
+        eligible_end = prices[1] if prices else None
         return {
             "eligibleStartDate": _date_text(eligible_start) if eligible_start else None,
             "eligibleEndDate": _date_text(eligible_end) if eligible_end else None,

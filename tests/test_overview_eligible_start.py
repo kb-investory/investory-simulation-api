@@ -87,7 +87,10 @@ class OverviewEligibleStartTests(unittest.TestCase):
 
         self.assertEqual(overview["eligibleStartDate"], "2026-06-02")
 
-    def test_journal_only_account_is_unaffected(self):
+    def test_journal_alone_without_a_runnable_anchor_stays_none(self):
+        """Journal entries are an evidence stat, not a substitute for a real
+        snapshot/trade anchor — the simulation can't start from journal text
+        alone, so this must not resolve a start date (#27)."""
         repository = self._repository(
             journal_row=(date(2026, 1, 5), date(2026, 8, 1), 40),
             first_snapshot=None,
@@ -96,7 +99,26 @@ class OverviewEligibleStartTests(unittest.TestCase):
 
         overview = repository.load_overview(user_id=1, account_id=1)
 
-        self.assertEqual(overview["eligibleStartDate"], "2026-01-05")
+        self.assertIsNone(overview["eligibleStartDate"])
+
+    def test_narrow_journal_does_not_clamp_a_wider_trade_and_price_range(self):
+        """The #27 bug: a short/recent journal used to narrow eligibleStartDate/
+        eligibleEndDate even when real trade and price coverage was much wider.
+        Journal dates must no longer factor into either bound at all."""
+        repository = self._repository(
+            journal_row=(date(2026, 7, 1), date(2026, 7, 10), 5),  # narrow, recent
+            first_snapshot=None,
+            first_trade=datetime(2026, 1, 5, 9, 30, 0),  # far earlier than the journal
+            first_runnable_after=date(2026, 1, 6),
+            price_summary=(date(2024, 1, 2), date(2026, 8, 21), 642, 30),  # far later than the journal
+        )
+
+        overview = repository.load_overview(user_id=1, account_id=1)
+
+        self.assertEqual(overview["eligibleStartDate"], "2026-01-06")
+        self.assertEqual(overview["eligibleEndDate"], "2026-08-21")
+        # Still surfaced as a reference stat, just no longer a bound.
+        self.assertEqual(overview["journalDays"], 5)
 
     def test_no_journal_no_snapshot_no_trades_stays_none(self):
         repository = self._repository(
