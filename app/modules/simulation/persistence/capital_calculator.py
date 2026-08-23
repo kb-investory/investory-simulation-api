@@ -53,6 +53,7 @@ class InitialCapitalCalculator:
                     "snapshotDate": snapshot["snapshotDate"],
                 },
             )
+        is_reconstructed = snapshot["calculationPolicy"] == "RECONSTRUCTED_FROM_TRADE_MATCHES"
         return {
             "startDate": start_date,
             "snapshotDate": snapshot["snapshotDate"],
@@ -63,6 +64,11 @@ class InitialCapitalCalculator:
                 sum(item["unrealizedPnl"] for item in snapshot["holdings"]), 2
             ),
             "calculationPolicy": snapshot["calculationPolicy"],
-            "policyDescription": "시뮬레이션 시작일 직전 보유 스냅샷의 평가금액 합계",
+            "policyDescription": (
+                "보유 스냅샷이 없어 매매 내역(trade_matches)으로 재구성한 평가금액 합계"
+                if is_reconstructed
+                else "시뮬레이션 시작일 직전 보유 스냅샷의 평가금액 합계"
+            ),
             "holdings": snapshot["holdings"],
+            "unmatchedSellCount": snapshot.get("unmatchedSellCount", 0),
         }

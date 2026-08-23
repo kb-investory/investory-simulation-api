@@ -770,6 +770,15 @@ class SimulationRepository:
         }
 
     def load_initial_snapshot(self, account_id: int, period_start: str) -> dict:
+        """Resolve the account's holdings just before period_start.
+
+        Priority 1: a stored holding_snapshots row (authoritative, cheap).
+        Priority 2: no snapshot row exists, but the account's own trades do —
+        reconstruct remaining lots from trade_matches (already FIFO-matched
+        elsewhere) instead of requiring a batch job to have run for this
+        account first. Priority 3: no trades before period_start either —
+        there is nothing to reconstruct from, so this stays a hard failure.
+        """
         conn = self.connection_factory()
         try:
             with conn.cursor() as cur:
@@ -784,11 +793,10 @@ class SimulationRepository:
                 row = cur.fetchone()
                 snapshot_date = row[0] if row else None
                 if not snapshot_date:
-                    raise SimulationDataError(
-                        "INITIAL_SNAPSHOT_NOT_FOUND",
-                        "시뮬레이션 시작일 이전의 보유 스냅샷이 없습니다.",
-                        {"accountId": account_id, "periodStart": period_start},
+                    return self._reconstruct_initial_snapshot_from_trade_matches(
+                        cur, account_id, period_start
                     )
+
                 cur.execute(
                     """
                     SELECT h.security_id, s.security_code, s.security_name,
@@ -813,6 +821,7 @@ class SimulationRepository:
                 "averageCost": float(row[4]),
                 "marketValue": float(row[5]),
                 "unrealizedPnl": float(row[6]),
+                "marketValueQuality": "STORED_SNAPSHOT",
             }
             for row in rows
             if float(row[3]) > 0
@@ -831,6 +840,142 @@ class SimulationRepository:
             "holdings": holdings,
             "holdingsCount": len(holdings),
             "calculationPolicy": "PREVIOUS_TRADING_DAY_HOLDING_SNAPSHOT",
+            "unmatchedSellCount": 0,
+        }
+
+    def _reconstruct_initial_snapshot_from_trade_matches(
+        self, cur, account_id: int, period_start: str
+    ) -> dict:
+        """Derive holdings just before period_start purely from this account's
+        own trades, using trade_matches' existing FIFO matching instead of
+        replaying the account's full trade/price history in Python.
+
+        A BUY trade's remaining (unsold-as-of-period_start) quantity is its
+        own quantity minus whatever trade_matches says was sold against it by
+        a SELL that happened before period_start. Buys that are still fully
+        unsold never appear in trade_matches at all, which is fine — COALESCE
+        treats "no match row" as "nothing sold yet".
+        """
+        cur.execute(
+            """
+            SELECT t.security_id, s.security_code, s.security_name,
+                   t.quantity, t.unit_price,
+                   t.quantity - COALESCE(matched.total_matched, 0) AS remaining_quantity
+            FROM trades t
+            JOIN securities s ON s.security_id = t.security_id
+            LEFT JOIN (
+                SELECT tm.buy_trade_id, SUM(tm.matched_quantity) AS total_matched
+                FROM trade_matches tm
+                JOIN trades sell_t ON sell_t.trade_id = tm.sell_trade_id
+                WHERE sell_t.traded_at < %s
+                GROUP BY tm.buy_trade_id
+            ) matched ON matched.buy_trade_id = t.trade_id
+            WHERE t.account_id = %s AND t.trade_side = 'BUY' AND t.traded_at < %s
+            """,
+            (period_start, account_id, period_start),
+        )
+        buy_rows = cur.fetchall()
+        if not buy_rows:
+            raise SimulationDataError(
+                "INITIAL_HOLDINGS_NOT_FOUND",
+                "거래 내역이 없어 초기 보유 현황을 계산할 수 없습니다.",
+                {"accountId": account_id, "periodStart": period_start},
+            )
+
+        lots_by_security: Dict[int, dict] = {}
+        security_meta: Dict[int, tuple] = {}
+        for security_id, code, name, _quantity, unit_price, remaining_quantity in buy_rows:
+            security_id = int(security_id)
+            security_meta[security_id] = (code, name)
+            remaining = float(remaining_quantity) if remaining_quantity is not None else 0.0
+            if remaining <= 1e-6:
+                continue
+            bucket = lots_by_security.setdefault(security_id, {"quantity": 0.0, "costSum": 0.0})
+            bucket["quantity"] += remaining
+            bucket["costSum"] += remaining * float(unit_price)
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM trades t
+            WHERE t.account_id = %s AND t.trade_side = 'SELL' AND t.traded_at < %s
+              AND NOT EXISTS (SELECT 1 FROM trade_matches tm WHERE tm.sell_trade_id = t.trade_id)
+            """,
+            (account_id, period_start),
+        )
+        unmatched_sell_count = int(cur.fetchone()[0])
+
+        if not lots_by_security:
+            raise SimulationDataError(
+                "INITIAL_CAPITAL_EMPTY",
+                "재구성된 보유 평가금액이 0원입니다.",
+                {"accountId": account_id, "periodStart": period_start},
+            )
+
+        security_ids = tuple(lots_by_security.keys())
+        cur.execute(
+            """
+            SELECT p1.security_id, p1.close_price
+            FROM security_daily_prices p1
+            INNER JOIN (
+                SELECT security_id, MAX(price_date) AS max_date
+                FROM security_daily_prices
+                WHERE security_id IN %s AND price_date < %s
+                GROUP BY security_id
+            ) latest
+              ON latest.security_id = p1.security_id AND latest.max_date = p1.price_date
+            """,
+            (security_ids, period_start),
+        )
+        price_lookup = {int(sec_id): float(price) for sec_id, price in cur.fetchall()}
+
+        holdings = []
+        for security_id, bucket in sorted(lots_by_security.items()):
+            quantity = bucket["quantity"]
+            average_cost = bucket["costSum"] / quantity
+            security_code, security_name = security_meta[security_id]
+            if security_id in price_lookup:
+                market_price = price_lookup[security_id]
+                quality = "ACTUAL_CLOSE_PRICE"
+            else:
+                # No price history at all for this security (e.g. long-delisted).
+                # Fall back to cost basis rather than dropping the holding —
+                # zero-valuing a real position would understate initial capital.
+                market_price = average_cost
+                quality = "PRICE_UNAVAILABLE_COST_BASIS_FALLBACK"
+            market_value = quantity * market_price
+            holdings.append(
+                {
+                    "securityId": security_id,
+                    "securityCode": security_code,
+                    "securityName": security_name,
+                    "quantity": round(quantity, 4),
+                    "averageCost": round(average_cost, 4),
+                    "marketValue": round(market_value, 2),
+                    "unrealizedPnl": round(market_value - quantity * average_cost, 2),
+                    "marketValueQuality": quality,
+                }
+            )
+
+        initial_capital = sum(item["marketValue"] for item in holdings)
+        if initial_capital <= 0:
+            raise SimulationDataError(
+                "INITIAL_CAPITAL_EMPTY",
+                "재구성된 보유 평가금액이 0원입니다.",
+                {"accountId": account_id, "periodStart": period_start},
+            )
+
+        anchor_date = (
+            datetime.strptime(period_start, "%Y-%m-%d").date() - timedelta(days=1)
+        ).isoformat()
+        return {
+            "snapshotDate": anchor_date,
+            "accountId": account_id,
+            "initialCapital": round(initial_capital, 2),
+            "holdings": holdings,
+            "holdingsCount": len(holdings),
+            "calculationPolicy": "RECONSTRUCTED_FROM_TRADE_MATCHES",
+            "unmatchedSellCount": unmatched_sell_count,
         }
 
     def load_disclosures(self, period_start: str, period_end: str) -> List[dict]:
