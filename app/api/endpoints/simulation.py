@@ -219,14 +219,26 @@ async def get_simulation_overview(
     requested_start = start_date or overview["eligibleStartDate"]
     capital_info = None
     capital_error = None
-    try:
-        capital_info = await asyncio.to_thread(
-            InitialCapitalCalculator().calculate,
-            start_date=requested_start,
-            account_id=target_account_id,
-        )
-    except SimulationDataError as error:
-        capital_error = {"code": error.code, "message": error.message, "details": error.details}
+    if requested_start is None:
+        # No explicit date requested and nothing to derive one from (no
+        # journal entries, no snapshot, no trades) — calling
+        # calculate(start_date=None) would silently pass NULL into every SQL
+        # comparison downstream and fail with a misleading data-not-found
+        # error instead of the actual "can't tell where to start" problem.
+        capital_error = {
+            "code": "ELIGIBLE_START_DATE_UNKNOWN",
+            "message": "시뮬레이션 시작일을 추천할 수 없습니다 — 계좌에 거래내역이나 투자 일지가 없습니다.",
+            "details": {"accountId": target_account_id},
+        }
+    else:
+        try:
+            capital_info = await asyncio.to_thread(
+                InitialCapitalCalculator().calculate,
+                start_date=requested_start,
+                account_id=target_account_id,
+            )
+        except SimulationDataError as error:
+            capital_error = {"code": error.code, "message": error.message, "details": error.details}
 
     return {
         "isReady": capital_info is not None,
