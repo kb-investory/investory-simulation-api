@@ -2,6 +2,8 @@ import json
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.api.endpoints.principles import (
     AcceptPrincipleProposalRequest,
     accept_principle_proposal,
@@ -95,6 +97,9 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
     def test_discovery_is_appended_from_server_stored_proposal(self):
         connection = FakeConnection()
         with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=1,
+        ), patch(
             "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=self._detail("DISCOVERY"),
         ), patch(
@@ -124,6 +129,9 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             ruleJson={"entry": {"max_5day_return": 0.08}},
         )
         with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=1,
+        ), patch(
             "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
@@ -169,6 +177,9 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             }
         }
         with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=1,
+        ), patch(
             "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
@@ -209,6 +220,9 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             }
         }
         with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=1,
+        ), patch(
             "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=detail,
         ), patch(
@@ -240,6 +254,9 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
             ),
         )
         with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=1,
+        ), patch(
             "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
             return_value=self._detail("DISCOVERY"),
         ), patch(
@@ -259,6 +276,30 @@ class PrincipleProposalAcceptanceTests(unittest.TestCase):
         self.assertTrue(result["idempotentReplay"])
         self.assertEqual(result["principleSetItemId"], 88)
         self.assertEqual(result["ruleJson"], {"entry": {"max_5day_return": 0.10}})
+
+
+    def test_a_simulation_belonging_to_someone_else_is_refused(self):
+        connection = FakeConnection()
+        with patch(
+            "app.modules.simulation.persistence.db_persistence.get_simulation_owner_id",
+            return_value=77,
+        ), patch(
+            "app.modules.simulation.persistence.db_persistence.load_simulation_from_db_by_id",
+            return_value=self._detail("DISCOVERY"),
+        ), patch(
+            "app.modules.simulation.persistence.db_persistence.get_db_connection",
+            return_value=connection,
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                accept_principle_proposal(
+                    AcceptPrincipleProposalRequest(simulationId=10, recommendationId=2001),
+                    user_id=1,
+                )
+
+        # 404 rather than 403: a stranger must not learn the run exists.
+        self.assertEqual(caught.exception.status_code, 404)
+        self.assertFalse(connection.committed)
+        self.assertEqual(connection.fake_cursor.executions, [])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 from app.api.endpoints import simulation
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
@@ -23,7 +23,8 @@ class SimulationReportAsyncTests(unittest.TestCase):
         }
         background_tasks = BackgroundTasks()
 
-        result = simulation.get_simulation_report(987654, background_tasks)
+        with patch.object(simulation, "get_simulation_owner_id", return_value=1):
+            result = simulation.get_simulation_report(987654, background_tasks, user_id=1)
 
         # The stored report is answered in the delivered shape without waiting,
         # and the narrative it is still missing is scheduled behind the response.
@@ -61,6 +62,42 @@ class SimulationReportAsyncTests(unittest.TestCase):
         save_report.assert_called_once_with(987654, enriched_report)
         self.assertIs(simulation.SIMULATION_RUN_CACHE[987654]["report_json"], enriched_report)
         self.assertNotIn(987654, simulation.REPORT_NARRATIVE_IN_PROGRESS)
+
+
+class SimulationOwnershipTests(unittest.TestCase):
+    def tearDown(self):
+        simulation.SIMULATION_RUN_CACHE.pop(987654, None)
+
+    def test_another_users_report_is_not_served_from_the_shared_cache(self):
+        # The cache is process-wide, so a run cached by whoever executed it last
+        # must not become readable to the next caller.
+        report = {
+            "reportVersion": SimulationReportGenerator.REPORT_VERSION,
+            "generationMetadata": {"narrativeStatus": "COMPLETED"},
+        }
+        simulation.SIMULATION_RUN_CACHE[987654] = {"report_json": report, "reportJson": report}
+
+        with patch.object(simulation, "get_simulation_owner_id", return_value=12):
+            with self.assertRaises(HTTPException) as caught:
+                simulation.get_simulation_report(987654, BackgroundTasks(), user_id=1)
+
+        self.assertEqual(caught.exception.status_code, 404)
+
+    def test_another_users_detail_is_not_served_from_the_shared_cache(self):
+        simulation.SIMULATION_RUN_CACHE[987654] = {"periodStart": "2026-01-01"}
+
+        with patch.object(simulation, "get_simulation_owner_id", return_value=12):
+            with self.assertRaises(HTTPException) as caught:
+                simulation.get_simulation_detail(987654, user_id=1)
+
+        self.assertEqual(caught.exception.status_code, 404)
+
+    def test_a_run_that_does_not_exist_is_refused_the_same_way(self):
+        with patch.object(simulation, "get_simulation_owner_id", return_value=None):
+            with self.assertRaises(HTTPException) as caught:
+                simulation.get_simulation_detail(987654, user_id=1)
+
+        self.assertEqual(caught.exception.status_code, 404)
 
 
 if __name__ == "__main__":

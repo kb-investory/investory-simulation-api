@@ -73,10 +73,20 @@ def accept_principle_proposal(
     """Apply only a server-stored and validated V3 proposal to the active principle set."""
     from app.modules.simulation.persistence.db_persistence import (
         get_db_connection,
+        get_simulation_owner_id,
         load_simulation_from_db_by_id,
     )
     from app.modules.simulation.analytics.report_analysis import REPORT_IDENTITY
 
+    # A proposal is only applicable to the principles of the account the
+    # simulation was run for. Without this, any id could be used to write
+    # someone else's strengthening into the caller's own principle set.
+    owner_id = get_simulation_owner_id(req.simulationId)
+    if owner_id is None or owner_id != user_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"시뮬레이션 ID({req.simulationId})를 찾을 수 없습니다.",
+        )
     detail = load_simulation_from_db_by_id(req.simulationId)
     report = (detail or {}).get("report_json") or (detail or {}).get("reportJson") or {}
     if report.get("reportVersion") != REPORT_IDENTITY:

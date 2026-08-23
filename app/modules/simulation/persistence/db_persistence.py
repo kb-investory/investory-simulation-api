@@ -415,6 +415,23 @@ def get_simulation_history_from_db(user_id: int = 1) -> Optional[List[dict]]:
             conn.close()
 
 
+def get_simulation_owner_id(simulation_run_id: int) -> Optional[int]:
+    """Return the user a simulation belongs to, or None if there is no such run."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT user_id FROM simulation_runs WHERE simulation_run_id = %s",
+                (simulation_run_id,),
+            )
+            row = cur.fetchone()
+            return int(row[0]) if row and row[0] is not None else None
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_latest_completed_simulation_id_from_db(user_id: int = 1) -> Optional[int]:
     """Return the latest completed run that has persisted result data."""
     conn = None

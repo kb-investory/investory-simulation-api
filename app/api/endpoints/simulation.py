@@ -41,6 +41,7 @@ from app.modules.simulation.persistence.db_persistence import (
     load_simulation_from_db_by_id,
     save_simulation_report_to_db,
     get_latest_completed_simulation_id_from_db,
+    get_simulation_owner_id,
 )
 
 from app.api.endpoints.simulation_helpers import (
@@ -109,6 +110,24 @@ def _schedule_report_enrichment(
         deepcopy(base_report),
     )
     return True
+
+
+def _require_owned_simulation(simulation_id: int, user_id: int) -> None:
+    """Refuse a simulation that does not belong to the caller.
+
+    Ownership is read from the database rather than the in-memory cache: that
+    cache is process-wide and its entries do not all carry an owner, so
+    trusting it is what let one account's run reach another account.
+
+    A stranger's id answers 404, not 403, so probing ids cannot be used to
+    learn which simulations exist.
+    """
+    owner_id = get_simulation_owner_id(simulation_id)
+    if owner_id is None or owner_id != user_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"시뮬레이션 ID({simulation_id})를 찾을 수 없습니다.",
+        )
 
 
 def _enrich_simulation_report_in_background(simulation_id: int, base_report: dict) -> None:
@@ -786,10 +805,9 @@ async def get_latest_simulation(user_id: int = Depends(get_current_user_id)):
     - 가장 최근 실행된 시뮬레이션의 대시보드 성과 데이터를 조회합니다.
     - DB/캐시에 실행 기록이 없으면 404를 반환합니다.
     """
-    if SIMULATION_RUN_CACHE:
-        latest_id = list(SIMULATION_RUN_CACHE.keys())[-1]
-        return await asyncio.to_thread(get_simulation_detail, latest_id, user_id)
-
+    # The in-memory cache is shared by the whole process, so its most recent
+    # entry is whoever ran last on this server, not this user. The latest run
+    # has to be resolved against the caller's own rows.
     max_id = await asyncio.to_thread(
         get_latest_completed_simulation_id_from_db,
         user_id,
@@ -808,6 +826,7 @@ def get_simulation_detail(simulation_id: int, user_id: int = Depends(get_current
     [대응 화면: p3vHxf, rGj4P, GTmqX]
     - 특정 시뮬레이션 ID의 4개 봇 성과 비교, 일별 자산 그래프, 상세 체결 일지를 조회합니다.
     """
+    _require_owned_simulation(simulation_id, user_id)
     # 1. 인메모리 세션 캐시에서 확인
     if simulation_id in SIMULATION_RUN_CACHE:
         cached = SIMULATION_RUN_CACHE[simulation_id]
@@ -874,6 +893,7 @@ def get_simulation_report(
     - 1위가 누구냐에 따라 갈리는 결과(outcome)와 그 갈래가 쓰는 섹션만 반환합니다.
     - 저장본은 전체 분석을 유지하고, 화면이 읽는 형태로만 좁혀서 내보냅니다.
     """
+    _require_owned_simulation(simulation_id, user_id)
     try:
         # 1. 인메모리 캐시에서 먼저 확인
         if simulation_id in SIMULATION_RUN_CACHE:
