@@ -564,14 +564,30 @@ def get_comparator_bots(
     """
     repository = SimulationRepository()
     try:
-        bot = repository.load_compiled_personal_bot(user_id, personalBotId)
+        bot = None
+        personal_bot_error = None
         try:
-            principle_items = repository.load_principles(user_id)
+            bot = repository.load_compiled_personal_bot(user_id, personalBotId)
         except SimulationDataError as error:
-            if error.code != "PRINCIPLES_NOT_FOUND":
+            # A specific bot id that doesn't exist is a real 404 below. Only
+            # "nobody has compiled one yet" degrades — the other 3 comparators
+            # never needed a personal bot in the first place.
+            if personalBotId or error.code != "PERSONAL_BOT_NOT_COMPILED":
                 raise
-            principle_items = []
-        return build_comparators(bot, principle_items, _load_detail_evidence(repository, user_id, accountId))
+            personal_bot_error = {"code": error.code, "message": error.message}
+
+        principle_items = []
+        if bot is not None:
+            try:
+                principle_items = repository.load_principles(user_id)
+            except SimulationDataError as error:
+                if error.code != "PRINCIPLES_NOT_FOUND":
+                    raise
+                principle_items = []
+        return build_comparators(
+            bot, principle_items, _load_detail_evidence(repository, user_id, accountId),
+            personal_bot_error=personal_bot_error,
+        )
     except SimulationDataError as error:
         status_code = 404 if personalBotId and error.code == "PERSONAL_BOT_NOT_COMPILED" else 422
         raise HTTPException(

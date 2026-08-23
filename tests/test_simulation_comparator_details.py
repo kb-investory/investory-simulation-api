@@ -78,6 +78,17 @@ class FakeRepository:
         return dict(EVIDENCE)
 
 
+class NoPersonalBotRepository(FakeRepository):
+    """No personal bot has ever been compiled for this user (personalBotId omitted)."""
+
+    def load_compiled_personal_bot(self, user_id, personal_bot_id=None):
+        raise SimulationDataError(
+            "PERSONAL_BOT_NOT_COMPILED",
+            "저장된 개인 투자봇이 없습니다. 먼저 투자봇 생성 API를 실행해 주세요.",
+            {"personalBotId": personal_bot_id} if personal_bot_id else {},
+        )
+
+
 class SimulationComparatorDetailTests(unittest.TestCase):
     def setUp(self):
         COMPILE_JOB_CACHE.clear()
@@ -132,6 +143,22 @@ class SimulationComparatorDetailTests(unittest.TestCase):
             get_comparator_bots(personalBotId="DOES_NOT_EXIST", user_id=1)
         self.assertEqual(context.exception.status_code, 404)
         self.assertEqual(context.exception.detail["code"], "PERSONAL_BOT_NOT_COMPILED")
+
+    @patch("app.api.endpoints.simulation.SimulationRepository", return_value=NoPersonalBotRepository())
+    def test_uncompiled_personal_bot_degrades_to_a_placeholder_instead_of_failing_the_list(
+        self, repository_class,
+    ):
+        result = get_comparator_bots(user_id=1)
+
+        self.assertEqual(len(result), 4)
+        self.assertEqual([item["variantId"] for item in result], [1, 2, 3, 4])
+        for item in result:
+            if item["variantId"] != 2:
+                self.assertEqual(item["availability"], "AVAILABLE")
+        personal_slot = result[1]
+        self.assertEqual(personal_slot["availability"], "NOT_COMPILED")
+        self.assertIsNone(personal_slot["personalBotId"])
+        self.assertEqual(personal_slot["unavailableReason"]["code"], "PERSONAL_BOT_NOT_COMPILED")
 
     @patch("app.api.endpoints.simulation.SimulationRepository", return_value=FakeRepository())
     def test_completed_compile_detail_matches_comparator_and_polling(self, repository_class):

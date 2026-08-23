@@ -246,16 +246,49 @@ def build_personal_comparator(bot: dict, principle_items: Optional[Iterable[dict
             "analysisRunId": bot.get("analysisRunId"),
             "analysisVersion": bot.get("analysisVersion"),
         },
+        "availability": "AVAILABLE",
+        "unavailableReason": None,
     }
 
 
-def build_comparators(bot: dict, principle_items: Optional[Iterable[dict]], evidence: Optional[dict]) -> List[dict]:
+def _unavailable_personal_comparator(personal_bot_error: Optional[dict]) -> dict:
+    """A placeholder slot 2 entry for when no personal bot exists yet.
+
+    Kept at the same array position and shape as a real comparator (minus the
+    fields that don't apply) so callers never have to special-case array
+    length — they check `availability` instead.
+    """
+    return {
+        "variantId": 2, "variantType": "PERSONAL_BOT", "variantName": "나의 투자봇",
+        "description": "사용자의 확정 원칙과 투자 성향을 바탕으로 생성되는 개인 투자봇입니다.",
+        "fixed": True, "selectable": False, "className": "PERSONAL", "level": "",
+        "traits": [], "strategyLabel": "PERSONAL STRATEGY",
+        "versionLine": "아직 생성되지 않음",
+        "summary": "투자 원칙과 성향 분석이 준비되면 투자봇을 생성할 수 있습니다.",
+        "principles": [], "rules": [], "dataEvidence": None,
+        "personalBotId": None, "botVersion": None, "confidencePercent": None, "profileSource": None,
+        "availability": "NOT_COMPILED",
+        "unavailableReason": dict(personal_bot_error) if personal_bot_error else None,
+    }
+
+
+def build_comparators(
+    bot: Optional[dict],
+    principle_items: Optional[Iterable[dict]],
+    evidence: Optional[dict],
+    personal_bot_error: Optional[dict] = None,
+) -> List[dict]:
     evidence = evidence if isinstance(evidence, dict) else {}
     trade_count = int(evidence.get("tradeCount") or 0)
     journal_count = int(evidence.get("journalCount") or 0)
     actual_updated = _datetime_text(evidence.get("actualUpdatedAt"))
     security_count = int(evidence.get("analyzedSecurityCount") or 0)
     system_updated = _datetime_text(evidence.get("systemUpdatedAt"))
+    personal_comparator = (
+        _unavailable_personal_comparator(personal_bot_error)
+        if bot is None
+        else build_personal_comparator(bot, principle_items, evidence)
+    )
     return [
         {
             "variantId": 1, "variantType": "ACTUAL_USER", "variantName": "실제 나",
@@ -268,8 +301,9 @@ def build_comparators(bot: dict, principle_items: Optional[Iterable[dict]], evid
             "rules": [_rule("execution", "거래 방식", "실제 체결 내역 재현", "DATABASE_ACTUAL_FILL")],
             "dataEvidence": {"title": "실제 투자 기록을 사용해요", "summary": f"실제 거래 {trade_count}건 · 투자 일지 {journal_count}건", "source": "MYSQL", "updatedAt": actual_updated, "tradeCount": trade_count, "journalCount": journal_count},
             "personalBotId": None, "botVersion": None, "confidencePercent": None, "profileSource": None,
+            "availability": "AVAILABLE", "unavailableReason": None,
         },
-        build_personal_comparator(bot, principle_items, evidence),
+        personal_comparator,
         {
             "variantId": 3, "variantType": "FAMOUS_STRATEGY", "variantName": "우량 가치·품질 퀀트 봇",
             "description": "재무·가격 데이터를 근거로 가치와 품질을 평가하는 비교 전략봇입니다.",
@@ -294,6 +328,7 @@ def build_comparators(bot: dict, principle_items: Optional[Iterable[dict]], evid
             ],
             "dataEvidence": {"title": "시장·재무 데이터를 사용해요", "summary": f"분석 가능 종목 {security_count}개 · 가치·품질 팩터 적용", "source": "SYSTEM_CONFIG", "updatedAt": system_updated, "analyzedSecurityCount": security_count, "strategyCount": 1},
             "personalBotId": None, "botVersion": "v1.0", "confidencePercent": None, "profileSource": None,
+            "availability": "AVAILABLE", "unavailableReason": None,
         },
         {
             "variantId": 4, "variantType": "RANDOM_BOT", "variantName": "원숭이 봇",
@@ -316,5 +351,6 @@ def build_comparators(bot: dict, principle_items: Optional[Iterable[dict]], evid
             ],
             "dataEvidence": {"title": "무작위 비교 실험 데이터예요", "summary": f"몬테카를로 {RANDOM_MONTE_CARLO_RUN_COUNT}회 · 동일 기간·동일 초기자금", "source": "SYSTEM_CONFIG", "updatedAt": None, "monteCarloRunCount": RANDOM_MONTE_CARLO_RUN_COUNT},
             "personalBotId": None, "botVersion": "v1.0", "confidencePercent": None, "profileSource": None,
+            "availability": "AVAILABLE", "unavailableReason": None,
         },
     ]

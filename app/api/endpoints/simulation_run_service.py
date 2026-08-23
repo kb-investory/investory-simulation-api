@@ -14,7 +14,7 @@
 import logging
 from dataclasses import asdict
 from time import perf_counter
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from fastapi import BackgroundTasks
 
@@ -130,8 +130,33 @@ class SimulationRunService:
         self.initial_capital = float(self.initial_state["initialCapital"])
 
         self.compiled_bot = None
+        self.excluded_participants: List[dict] = []
         if "PERSONAL_BOT" in self.participant_types:
-            self.compiled_bot = self.repository.load_compiled_personal_bot(self.user_id, req.personal_bot_id)
+            try:
+                self.compiled_bot = self.repository.load_compiled_personal_bot(
+                    self.user_id, req.personal_bot_id
+                )
+            except SimulationDataError as error:
+                # A specific bot id that doesn't exist is a real failure below.
+                # Only "nobody has compiled one yet" degrades — the other
+                # participants never depended on a personal bot existing.
+                if req.personal_bot_id or error.code != "PERSONAL_BOT_NOT_COMPILED":
+                    raise
+                self.participant_types = [
+                    participant_type
+                    for participant_type in self.participant_types
+                    if participant_type != "PERSONAL_BOT"
+                ]
+                self.excluded_participants.append(
+                    {"variantType": "PERSONAL_BOT", "reason": error.code}
+                )
+
+        if not self.participant_types:
+            raise SimulationDataError(
+                "NO_RUNNABLE_PARTICIPANTS",
+                "실행 가능한 참가자가 없습니다.",
+                {"excludedParticipants": self.excluded_participants},
+            )
 
     # ---- 2. 캐시 확인 ----
     def _check_cache(self) -> Optional[dict]:
@@ -456,6 +481,7 @@ class SimulationRunService:
         response = {
             "simulationRunId": self.db_run_id,
             "persistenceStatus": "RUNNING",
+            "excludedParticipants": self.excluded_participants,
             "accountId": self.account_id,
             "periodStart": req.period_start,
             "periodEnd": req.period_end,
