@@ -54,6 +54,7 @@ from app.api.endpoints.simulation_helpers import (
     SimulationRunRequest, normalize_daily_snapshot, normalize_trade,
     SIMULATION_RUN_CACHE,
 )
+from app.core.metrics import SIMULATION_STAGE_LATENCY_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -173,8 +174,10 @@ class SimulationRunService:
             cached_result["accountId"] = self.account_id
             cached_result["dataSource"] = "MYSQL"
             cached_result["usesMockData"] = False
+            cache_lookup_ms = (perf_counter() - self.request_started) * 1000
+            SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="cacheLookup").observe(cache_lookup_ms / 1000)
             cached_result["executionTimingMs"] = {
-                "cacheLookup": round((perf_counter() - self.request_started) * 1000, 1),
+                "cacheLookup": round(cache_lookup_ms, 1),
                 "cacheHit": True,
             }
             SIMULATION_RUN_CACHE[cached_result["simulationRunId"]] = cached_result
@@ -215,6 +218,7 @@ class SimulationRunService:
         self.disclosure_events = self.repository.load_disclosures(req.period_start, req.period_end)
         self.data_quality = self.repository.assess_trade_price_quality(self.account_id, req.period_start, req.period_end)
         self.data_load_ms = (perf_counter() - self.request_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="dataLoad").observe(self.data_load_ms / 1000)
 
         self.securities_map = {item["securityId"]: item for item in self.securities}
         self.rule_schema_dict = self.compiled_bot["ruleSchema"] if self.compiled_bot else {}
@@ -274,6 +278,7 @@ class SimulationRunService:
         backtest_started = perf_counter()
         executed_trades, daily_snapshots = self.engine.run(self.disclosures_by_date)
         self.backtest_ms = (perf_counter() - backtest_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="backtest").observe(self.backtest_ms / 1000)
         self.normalized_snapshots = [normalize_daily_snapshot(item) for item in daily_snapshots]
         self.normalized_trades = [normalize_trade(item) for item in executed_trades]
         self.position_snapshots = self.engine.position_snapshots
@@ -321,6 +326,7 @@ class SimulationRunService:
                 seed_start=0,
             )
             self.monte_carlo_ms = (perf_counter() - monte_carlo_started) * 1000
+            SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="monteCarlo").observe(self.monte_carlo_ms / 1000)
             personal_summary = next(
                 (item for item in self.participant_summary if item["variantType"] == "PERSONAL_BOT"),
                 None,
@@ -369,6 +375,7 @@ class SimulationRunService:
             self.normalized_trades, self.daily_prices, self.normalized_snapshots
         )
         self.analytics_ms = (perf_counter() - analytics_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="analytics").observe(self.analytics_ms / 1000)
         self.analytics_payload = {
             "orderAudits": self.order_audits,
             "screeningAudits": self.screening_audits,
@@ -401,6 +408,9 @@ class SimulationRunService:
             initial_capital=self.initial_capital,
         )
         self.persistence_reservation_ms = (perf_counter() - persistence_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="persistenceReservation").observe(
+            self.persistence_reservation_ms / 1000
+        )
         self.background_tasks.add_task(
             save_simulation_run_to_db,
             user_id=self.user_id,
@@ -429,6 +439,9 @@ class SimulationRunService:
             analytics=report_analytics,
         )
         self.report_generation_ms = (perf_counter() - report_generation_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="reportGeneration").observe(
+            self.report_generation_ms / 1000
+        )
 
     # ---- 8. 원칙 반증 시뮬레이션 + 백그라운드 저장/강화 예약 ----
     def _apply_counterfactuals_and_schedule(self) -> None:
@@ -463,6 +476,9 @@ class SimulationRunService:
                 exc_info=error,
             )
         self.counterfactual_ms = (perf_counter() - counterfactual_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="principleCounterfactuals").observe(
+            self.counterfactual_ms / 1000
+        )
 
         self.background_tasks.add_task(
             save_simulation_report_to_db,
@@ -478,6 +494,8 @@ class SimulationRunService:
     # ---- 9. 응답 조립 ----
     def _build_response(self) -> dict:
         req = self.req
+        response_ready_ms = (perf_counter() - self.request_started) * 1000
+        SIMULATION_STAGE_LATENCY_SECONDS.labels(stage="responseReady").observe(response_ready_ms / 1000)
         response = {
             "simulationRunId": self.db_run_id,
             "persistenceStatus": "RUNNING",
@@ -537,7 +555,7 @@ class SimulationRunService:
                 "reportGeneration": round(self.report_generation_ms, 1),
                 "principleCounterfactuals": round(self.counterfactual_ms, 1),
                 "persistenceReservation": round(self.persistence_reservation_ms, 1),
-                "responseReady": round((perf_counter() - self.request_started) * 1000, 1),
+                "responseReady": round(response_ready_ms, 1),
                 "cacheHit": False,
             },
         }
