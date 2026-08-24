@@ -1,10 +1,11 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from app.api.endpoints.simulation import run_simulation
-from app.api.endpoints.simulation_helpers import SimulationRunRequest
+from app.api.endpoints.simulation_run_service import SimulationRunService
+from app.api.endpoints.simulation_helpers import SimulationRunRequest, SIMULATION_RUN_CACHE
 from app.modules.simulation.persistence.repository import SimulationDataError
 
 
@@ -16,13 +17,27 @@ def _not_compiled_error():
     )
 
 
+def _run_full(service: SimulationRunService) -> dict:
+    """#34: run_sync_phase() + run_async_phase()를 이어서 동기 호출해 전체 파이프라인을
+    재현한다 — 실제 요청은 bounded executor를 거치지만, 유닛테스트에서는 곧장 이어 실행해도
+    같은 결과(SIMULATION_RUN_CACHE에 쌓인 최종 응답)를 관찰할 수 있다.
+    """
+    cached = service.run_sync_phase()
+    if cached is not None:
+        return cached
+    service.run_async_phase()
+    return SIMULATION_RUN_CACHE[service.db_run_id]
+
+
 class PersonalBotExclusionTests(unittest.TestCase):
+    @patch("app.api.endpoints.simulation_run_service.save_simulation_report_to_db")
+    @patch("app.api.endpoints.simulation_run_service.save_simulation_run_to_db")
     @patch("app.api.endpoints.simulation_run_service.reserve_simulation_run_to_db", return_value=88801)
     @patch("app.api.endpoints.simulation_run_service.find_existing_simulation_from_db", return_value=None)
     @patch("app.api.endpoints.simulation_run_service.MarketIndexCollector.ensure_period", return_value={"status": "DB_HIT"})
     @patch("app.api.endpoints.simulation_run_service.SimulationRepository")
     def test_uncompiled_personal_bot_is_excluded_and_the_rest_still_runs(
-        self, repository_class, _ensure_period, _find_existing, reserve_run,
+        self, repository_class, _ensure_period, _find_existing, reserve_run, _save_run, _save_report,
     ):
         repository = MagicMock()
         repository_class.return_value = repository
@@ -53,12 +68,16 @@ class PersonalBotExclusionTests(unittest.TestCase):
         repository.load_disclosures.return_value = []
         repository.assess_trade_price_quality.return_value = {}
 
-        background_tasks = BackgroundTasks()
-        response = run_simulation(SimulationRunRequest(
-            periodStart="2026-01-01",
-            periodEnd="2026-01-02",
-            participantTypes=["ACTUAL_USER", "PERSONAL_BOT", "RANDOM_BOT"],
-        ), background_tasks, user_id=1)
+        service = SimulationRunService(
+            SimulationRunRequest(
+                periodStart="2026-01-01",
+                periodEnd="2026-01-02",
+                participantTypes=["ACTUAL_USER", "PERSONAL_BOT", "RANDOM_BOT"],
+            ),
+            user_id=1,
+            schedule_report_enrichment=lambda *args, **kwargs: None,
+        )
+        response = _run_full(service)
 
         self.assertEqual(
             response["excludedParticipants"],
@@ -80,13 +99,14 @@ class PersonalBotExclusionTests(unittest.TestCase):
         }
         repository.load_compiled_personal_bot.side_effect = _not_compiled_error()
 
-        background_tasks = BackgroundTasks()
+        # #34: 이 실패는 여전히 run_sync_phase() 안(_validate_and_resolve)에서 나므로,
+        # run_simulation() 라우터가 즉시 422로 변환한다 — 비동기 단계로 안 넘어감.
         with self.assertRaises(HTTPException) as context:
             run_simulation(SimulationRunRequest(
                 periodStart="2026-01-01",
                 periodEnd="2026-01-02",
                 participantTypes=["PERSONAL_BOT"],
-            ), background_tasks, user_id=1)
+            ), user_id=1)
 
         self.assertEqual(context.exception.status_code, 422)
         self.assertEqual(context.exception.detail["code"], "NO_RUNNABLE_PARTICIPANTS")
@@ -105,14 +125,13 @@ class PersonalBotExclusionTests(unittest.TestCase):
         }
         repository.load_compiled_personal_bot.side_effect = _not_compiled_error()
 
-        background_tasks = BackgroundTasks()
         with self.assertRaises(HTTPException) as context:
             run_simulation(SimulationRunRequest(
                 periodStart="2026-01-01",
                 periodEnd="2026-01-02",
                 participantTypes=["ACTUAL_USER", "PERSONAL_BOT"],
                 personalBotId="BOT_DOES_NOT_EXIST",
-            ), background_tasks, user_id=1)
+            ), user_id=1)
 
         self.assertEqual(context.exception.status_code, 422)
         self.assertEqual(context.exception.detail["code"], "PERSONAL_BOT_NOT_COMPILED")

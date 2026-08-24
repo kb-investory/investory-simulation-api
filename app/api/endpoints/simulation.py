@@ -17,6 +17,7 @@
 import uuid
 import asyncio
 import logging
+import threading
 from copy import deepcopy
 from threading import Lock
 from typing import Dict, List, Optional
@@ -48,7 +49,7 @@ from app.api.endpoints.simulation_helpers import (
     RuleCompileRequest, RuleConfirmationRequest, SimulationRunRequest,
     SIMULATION_RUN_CACHE,
 )
-from app.api.endpoints.simulation_run_service import SimulationRunService
+from app.api.endpoints.simulation_run_service import SimulationRunService, submit_simulation_run
 
 router = APIRouter(tags=["Simulation & Rules"])
 logger = logging.getLogger(__name__)
@@ -95,20 +96,27 @@ def _nested_rule_value(data: dict, dotted_path: str):
 
 
 def _schedule_report_enrichment(
-    background_tasks: BackgroundTasks,
     simulation_id: int,
     base_report: dict,
 ) -> bool:
-    """Schedule at most one model enrichment task for each simulation run."""
+    """Schedule at most one model enrichment task for each simulation run.
+
+    #34: 더 이상 FastAPI BackgroundTasks(HTTP 응답 이후에만 실행)에 묶이지 않는다 — 호출부
+    (SimulationRunService.run_async_phase)가 이미 자체 bounded worker pool 안에서 돌고
+    있어서, 여기서는 그 워커 슬롯을 LLM 타임아웃까지 붙잡지 않도록 별도 데몬 스레드로
+    fire-and-forget만 한다. get_simulation_report처럼 요청-응답 흐름 안에서 호출되는
+    경우도 있어(라우터 아래쪽 참고) BackgroundTasks 의존을 완전히 제거하는 쪽이 두 호출부
+    모두에 맞다.
+    """
     with REPORT_NARRATIVE_LOCK:
         if simulation_id in REPORT_NARRATIVE_IN_PROGRESS:
             return False
         REPORT_NARRATIVE_IN_PROGRESS.add(simulation_id)
-    background_tasks.add_task(
-        _enrich_simulation_report_in_background,
-        simulation_id,
-        deepcopy(base_report),
-    )
+    threading.Thread(
+        target=_enrich_simulation_report_in_background,
+        args=(simulation_id, deepcopy(base_report)),
+        daemon=True,
+    ).start()
     return True
 
 
@@ -711,23 +719,25 @@ def get_comparator_bots(
 # ==============================================================================
 # 5. 시뮬레이션 백테스트 실행 (대응 화면: y9DNLy)
 # ==============================================================================
-@router.post("/run", summary="5. 4개 비교 참가자 시뮬레이션 백테스트 실행")
+@router.post("/run", summary="5. 4개 비교 참가자 시뮬레이션 백테스트 실행 (비동기 제출, #34)")
 def run_simulation(
     req: SimulationRunRequest,
-    background_tasks: BackgroundTasks = None,
     user_id: int = Depends(get_current_user_id),
 ):
     """
     [대응 화면: y9DNLy]
     - 4개 대조군 봇의 독립 백테스트를 일별 이벤트 루프로 연산합니다.
+    - #34: 무거운 연산(백테스트+몬테카를로+분석+리포트)은 더 이상 이 응답을 막지 않는다.
+      가벼운 검증/캐시 조회만 동기로 처리하고 즉시 job 상태를 반환한다 — 캐시 미스면
+      status: "RUNNING"(클라이언트는 GET /{id}/status를 폴링), 캐시 히트면 폴링 없이
+      곧장 status: "COMPLETED". 실제 결과는 완료 후 GET /{id}로 읽는다
+      (POST /bots/compile과 동일한 제출+폴링 패턴).
     """
-    background_tasks = background_tasks or BackgroundTasks()
     try:
         service = SimulationRunService(
-            req, background_tasks, user_id,
-            schedule_report_enrichment=_schedule_report_enrichment,
+            req, user_id, schedule_report_enrichment=_schedule_report_enrichment,
         )
-        return service.run()
+        cached = service.run_sync_phase()
     except SimulationDataError as error:
         raise HTTPException(
             status_code=422,
@@ -748,6 +758,22 @@ def run_simulation(
             message="시뮬레이션을 실행하는 중 서버 오류가 발생했습니다.",
             simulation_run_id=req.simulation_run_id,
         ) from error
+
+    if cached is not None:
+        return {
+            "simulationRunId": cached["simulationRunId"],
+            "status": "COMPLETED",
+            "progressPercent": 100,
+            "message": "이미 완료된 시뮬레이션입니다.",
+        }
+
+    submit_simulation_run(service)
+    return {
+        "simulationRunId": service.db_run_id,
+        "status": "RUNNING",
+        "progressPercent": 10,
+        "message": "시뮬레이션을 실행하고 있습니다.",
+    }
 
 
 # ==============================================================================
@@ -848,6 +874,12 @@ def get_simulation_detail(simulation_id: int, user_id: int = Depends(get_current
             "simulatedTrades": cached.get("simulatedTrades", []),
             "dailyPerformance": cached.get("dailyPerformance", []),
             "dailySnapshots": cached.get("dailySnapshots", []),
+            # #34: POST /run이 더 이상 결과를 직접 응답하지 않으므로(비동기 job으로 전환),
+            # run_async_phase가 측정한 단계별 소요시간(dataLoad/backtest/monteCarlo/analytics/
+            # reportGeneration)을 확인할 수 있는 곳이 이 캐시 경유 상세 조회뿐이다. DB 재로드본
+            # (db_detail)에는 애초에 이 필드가 없어 None으로 빠지는게 맞다 — 원래도 비영속 필드였다.
+            "executionTimingMs": cached.get("executionTimingMs"),
+            "excludedParticipants": cached.get("excludedParticipants", []),
             **_analytics_response(cached),
         }
 
@@ -873,6 +905,8 @@ def get_simulation_detail(simulation_id: int, user_id: int = Depends(get_current
             "simulatedTrades": db_detail.get("simulatedTrades", []),
             "dailyPerformance": db_detail.get("dailyPerformance", []),
             "dailySnapshots": db_detail.get("dailySnapshots", []),
+            "executionTimingMs": db_detail.get("executionTimingMs"),
+            "excludedParticipants": db_detail.get("excludedParticipants", []),
             **_analytics_response(db_detail),
         }
 
@@ -885,7 +919,6 @@ def get_simulation_detail(simulation_id: int, user_id: int = Depends(get_current
 @router.get("/{simulation_id}/report", summary="8. AI 시뮬레이션 복기 및 결과 리포트 조회")
 def get_simulation_report(
     simulation_id: int,
-    background_tasks: BackgroundTasks,
     user_id: int = Depends(get_current_user_id),
 ):
     """
@@ -916,7 +949,6 @@ def get_simulation_report(
         ):
             if cached_report.get("generationMetadata", {}).get("narrativeStatus") == "PENDING":
                 _schedule_report_enrichment(
-                    background_tasks,
                     simulation_id,
                     cached_report,
                 )
@@ -956,7 +988,6 @@ def get_simulation_report(
             detail_data["report_json"] = report_data
             detail_data["reportJson"] = report_data
             _schedule_report_enrichment(
-                background_tasks,
                 simulation_id,
                 report_data,
             )

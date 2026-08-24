@@ -110,6 +110,11 @@ class Settings:
     DB_POOL_MAX_OVERFLOW: int = int(os.getenv("DB_POOL_MAX_OVERFLOW", "20"))
     DB_POOL_RECYCLE_SECONDS: int = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800"))
 
+    # #34: POST /simulation/run의 무거운 연산(백테스트+몬테카를로+분석+리포트)을 처리하는
+    # bounded worker pool 크기. 기본값 4는 실측 전 placeholder — GCP 배포 스펙 기준
+    # loadtest로 확정할 것(#34).
+    SIMULATION_RUN_WORKERS: int = int(os.getenv("SIMULATION_RUN_WORKERS", "4"))
+
     # Server Config
     PORT: int = int(os.getenv("PORT", "8000"))
 
