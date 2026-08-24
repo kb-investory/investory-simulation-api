@@ -100,8 +100,14 @@ class Settings:
     # SQLAlchemy pooled-connection settings (#29) — get_db_connection()이 이 풀에서 pymysql
     # 커넥션을 빌려온다. 동시 요청 상한은 스레드풀 크기(uvicorn 기본 워커 스레드, asyncio.to_thread
     # 기본 executor)와도 맞물리므로, 그 값들과 같이 조정할 것.
-    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))
-    DB_POOL_MAX_OVERFLOW: int = int(os.getenv("DB_POOL_MAX_OVERFLOW", "10"))
+    #
+    # 기본값 30+20=50은 #31 로컬 격리 환경 실측(50명 동시 POST /simulation/run) 기반이다 —
+    # 10+10=20이던 초기값은 커넥션을 짧게 반납하도록 고친 뒤에도 50명 동시 피크를 못 받아
+    # 40%가 QueuePool timeout으로 실패했고, 30+20으로 올리자 50/50 전부 성공했다. MySQL
+    # max_connections(로컬 151)에서 다른 서비스 몫을 빼고도 여유가 있는지 배포 대상 DB 기준으로
+    # 재확인할 것 — 특히 Cloud SQL처럼 max_connections가 인스턴스 티어에 따라 훨씬 낮은 환경.
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "30"))
+    DB_POOL_MAX_OVERFLOW: int = int(os.getenv("DB_POOL_MAX_OVERFLOW", "20"))
     DB_POOL_RECYCLE_SECONDS: int = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800"))
 
     # Server Config
