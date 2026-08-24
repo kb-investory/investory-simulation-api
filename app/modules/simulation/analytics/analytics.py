@@ -27,7 +27,12 @@ _executor: Optional[ProcessPoolExecutor] = None
 def _get_monte_carlo_executor() -> ProcessPoolExecutor:
     global _executor
     if _executor is None:
-        _executor = ProcessPoolExecutor(max_workers=os.cpu_count())
+        # os.cpu_count()가 기본값 — uvicorn --workers N으로 프로세스를 여러 개 띄우면 이 풀도
+        # 프로세스 수만큼 늘어나서, 전체 코어 수를 몇 배로 오버섭스크라이브하게 된다(실측:
+        # 4-worker에서 단일 프로세스보다 오히려 더 느려짐). 멀티프로세스 모드에서 실측할 땐
+        # MONTE_CARLO_WORKERS를 코어수/워커수로 낮춰서 줄 것.
+        worker_count = int(os.getenv("MONTE_CARLO_WORKERS", str(os.cpu_count())))
+        _executor = ProcessPoolExecutor(max_workers=worker_count)
     return _executor
 
 
