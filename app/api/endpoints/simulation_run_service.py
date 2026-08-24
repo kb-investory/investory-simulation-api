@@ -101,8 +101,18 @@ class SimulationRunService:
         self._validate_and_resolve()
         cached = self._check_cache()
         if cached is not None:
+            # self.repository의 DB 작업은 여기서 끝 — 캐시 히트 경로도 아래 실경로와 동일하게
+            # 커넥션을 곧장 반납한다(run()의 finally가 또 닫아도 close()는 idempotent).
+            self.repository.close()
             return cached
         self._load_data()
+        # #31: self.repository(reuse_connection=True)가 DB에 실제로 접근하는 건 여기까지다.
+        # 이 아래(_run_backtest/_summarize_and_simulate의 몬테카를로 500회/_compute_analytics)는
+        # 전부 CPU 바운드 연산이라 DB를 안 쓰는데, 커넥션을 요청 끝까지(run()의 finally) 붙들고
+        # 있으면 그 시간만큼 풀 슬롯을 그냥 놀리는 셈이라 동시 요청이 몰리면 풀이 고갈된다
+        # (로컬 50명 동시 실측: QueuePool limit ... timeout). 여기서 바로 반납해 그 구간 동안
+        # 다른 요청이 이 슬롯을 쓸 수 있게 한다.
+        self.repository.close()
         self._run_backtest()
         self._summarize_and_simulate()
         self._compute_analytics()
@@ -196,7 +206,13 @@ class SimulationRunService:
         self.daily_prices = self.repository.load_daily_prices(req.period_start, req.period_end)
         self.trading_days = sorted({item["priceDate"] for item in self.daily_prices})
         try:
-            self.benchmark_data = MarketIndexCollector().ensure_period(
+            # #31: 기본 connection_factory(get_db_connection)를 쓰면 이미 self.repository가
+            # 붙들고 있는 커넥션과 별개로 풀에서 하나를 더 체크아웃한다 — 요청 하나가 슬롯을
+            # 2개 동시에 쓰는 셈이라, self.repository의 재사용 커넥션을 그대로 넘겨서 하나만
+            # 쓰게 한다(_load_data() 안이라 아직 반납 전).
+            self.benchmark_data = MarketIndexCollector(
+                connection_factory=self.repository.connection_factory
+            ).ensure_period(
                 req.period_start,
                 req.period_end,
                 self.trading_days,
