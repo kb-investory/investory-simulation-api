@@ -96,7 +96,14 @@ class Settings:
         if env_url and "localhost:5432" not in env_url:
             return env_url
         return f"mysql+pymysql://{self.MYSQL_USER}:{self.MYSQL_PASSWORD}@{self.MYSQL_HOST}:{self.MYSQL_PORT}/{self.MYSQL_DB}"
-    
+
+    # SQLAlchemy pooled-connection settings (#29) — get_db_connection()이 이 풀에서 pymysql
+    # 커넥션을 빌려온다. 동시 요청 상한은 스레드풀 크기(uvicorn 기본 워커 스레드, asyncio.to_thread
+    # 기본 executor)와도 맞물리므로, 그 값들과 같이 조정할 것.
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "10"))
+    DB_POOL_MAX_OVERFLOW: int = int(os.getenv("DB_POOL_MAX_OVERFLOW", "10"))
+    DB_POOL_RECYCLE_SECONDS: int = int(os.getenv("DB_POOL_RECYCLE_SECONDS", "1800"))
+
     # Server Config
     PORT: int = int(os.getenv("PORT", "8000"))
 

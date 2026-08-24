@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional
 import pymysql
+from sqlalchemy import create_engine
 from app.config import settings
 from app.modules.simulation.persistence.rationale_snapshots import apply_rationale_type_snapshots
 
@@ -80,17 +81,35 @@ def reserve_simulation_run_to_db(
     finally:
         conn.close()
 
+# SQLAlchemy Engine은 여기서 pooled pymysql 커넥션의 공급원으로만 쓴다 (#29) — ORM/Core로
+# 옮기는 게 아니라, get_db_connection()을 connection_factory로 주입받는 기존 호출부(전 모듈에
+# 걸쳐 80곳 가까이)를 하나도 안 건드리고 커넥션 풀링만 얻기 위함이다. engine.raw_connection()이
+# 돌려주는 프록시는 .cursor()/.commit()/.rollback()/.close()를 실제 pymysql 커넥션에 그대로
+# 위임하고, close()는 소켓을 끊는 대신 풀에 반납한다 — 그래서 기존 "conn = get_db_connection();
+# ...; conn.close()" 패턴이 변경 없이 그대로 동작한다.
+_engine = None
+
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = create_engine(
+            settings.DATABASE_URL,
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_POOL_MAX_OVERFLOW,
+            # MySQL의 wait_timeout으로 서버가 먼저 끊어버린 유휴 커넥션을 풀에서 그대로
+            # 내주지 않도록 두 겹으로 막는다 — pre_ping은 매 체크아웃 시 가벼운 확인 쿼리로,
+            # recycle은 그 확인을 기다리지 않고 오래된 커넥션 자체를 선제적으로 재생성한다.
+            pool_pre_ping=True,
+            pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+            connect_args={"charset": "utf8mb4"},
+        )
+    return _engine
+
+
 def get_db_connection():
-    """MySQL 데이터베이스 커넥션 생성"""
-    return pymysql.connect(
-        host=settings.MYSQL_HOST,
-        port=settings.MYSQL_PORT,
-        user=settings.MYSQL_USER,
-        password=settings.MYSQL_PASSWORD,
-        database=settings.MYSQL_DB,
-        charset='utf8mb4',
-        autocommit=False
-    )
+    """MySQL 데이터베이스 커넥션을 SQLAlchemy 풀에서 빌려온다 (pymysql DBAPI, autocommit=False 기본값)."""
+    return _get_engine().raw_connection()
 
 def save_simulation_run_to_db(
     user_id: int,

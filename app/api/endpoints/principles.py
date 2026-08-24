@@ -360,19 +360,13 @@ def get_recommended_principles(user_id: int = Depends(get_current_user_id)):
 
 
 def _save_principles_db_task(principles_list, user_id: int):
-    from app.config import settings
-    import pymysql
+    from app.modules.simulation.persistence.db_persistence import get_db_connection
 
-    conn = pymysql.connect(
-        host=settings.MYSQL_HOST,
-        port=settings.MYSQL_PORT,
-        user=settings.MYSQL_USER,
-        password=settings.MYSQL_PASSWORD,
-        database=settings.MYSQL_DB,
-        charset='utf8mb4',
-        autocommit=True,
-        connect_timeout=3
-    )
+    # 예전엔 이 함수만 get_db_connection()을 거치지 않고 pymysql.connect(autocommit=True)를
+    # 직접 열었다 — 풀링 도입(#29)으로 다른 80여 곳과 동일하게 get_db_connection()으로
+    # 통일하면서, autocommit=True가 암묵적으로 해주던 커밋을 아래 conn.commit()으로 명시했다
+    # (안 하면 UPDATE/INSERT가 저장 안 되는 회귀가 생긴다).
+    conn = get_db_connection()
 
     saved_items = []
     try:
@@ -422,6 +416,10 @@ def _save_principles_db_task(principles_list, user_id: int):
                     "sortOrder": item_order,
                     "isConfirmed": True
                 })
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
