@@ -13,14 +13,42 @@ import datetime
 from zoneinfo import ZoneInfo
 from app.modules.simulation.collectors.dart_collector import DartCollector
 from app.modules.simulation.collectors.fundamentals_collector import FundamentalsCollector
+from app.modules.simulation.persistence.db_persistence import get_db_connection
 
 _scheduler_thread = None
 _stop_event = threading.Event()
 KST = ZoneInfo("Asia/Seoul")
 
+# uvicorn --workers N으로 띄우면 프로세스마다 이 모듈이 별도로 로드되고, 각자 자기만의
+# 스케줄러 스레드를 띄운다 — 그래서 N개 프로세스가 전부 같은 순간(16:30 KST)에 깨어나
+# 이 배치를 동시에 실행하려 든다. MySQL 네임드 락(GET_LOCK)으로 그중 하나만 실제로
+# 실행하게 막는다 — 작업이 끝날 때까지(락을 쥔 채로) 진행하므로, 먼저 획득 못 한 나머지
+# 프로세스는 그 순간 곧바로 스킵하고 다음 날 스케줄로 넘어간다(같은 날 다시 시도 안 함).
+_BATCH_JOB_LOCK_NAME = "investory_daily_batch_job"
+
+
 def _run_batch_job():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT GET_LOCK(%s, 0)", (_BATCH_JOB_LOCK_NAME,))
+            acquired = cur.fetchone()[0] == 1
+        if not acquired:
+            print("[Batch Cron] 다른 워커 프로세스가 오늘 배치를 이미 실행 중 — 이 워커는 건너뜀.")
+            return
+
+        try:
+            _run_batch_job_locked()
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("SELECT RELEASE_LOCK(%s)", (_BATCH_JOB_LOCK_NAME,))
+    finally:
+        conn.close()
+
+
+def _run_batch_job_locked():
     print(f"[Batch Cron] Starting daily data collection batch at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
-    
+
     # 1. OpenDART 당일 공시 수집 및 AI 영향 분석 DB 반영
     try:
         collector = DartCollector()
