@@ -1,10 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from fastapi import BackgroundTasks
-
-from app.api.endpoints.simulation import run_simulation
-from app.api.endpoints.simulation_helpers import SimulationRunRequest
+from app.api.endpoints.simulation_run_service import SimulationRunService
+from app.api.endpoints.simulation_helpers import SimulationRunRequest, SIMULATION_RUN_CACHE
 
 
 RULE_SCHEMA = {
@@ -28,6 +26,8 @@ RULE_SCHEMA = {
 
 
 class SimulationUsesCompiledBotTests(unittest.TestCase):
+    @patch("app.api.endpoints.simulation_run_service.save_simulation_report_to_db")
+    @patch("app.api.endpoints.simulation_run_service.save_simulation_run_to_db")
     @patch("app.api.endpoints.simulation_run_service.reserve_simulation_run_to_db", return_value=99)
     @patch("app.api.endpoints.simulation_run_service.find_existing_simulation_from_db", return_value=None)
     @patch("app.api.endpoints.simulation_run_service.MarketIndexCollector.ensure_period", return_value={"status": "DB_HIT"})
@@ -40,6 +40,8 @@ class SimulationUsesCompiledBotTests(unittest.TestCase):
         _ensure_period,
         _find_existing,
         reserve_run,
+        _save_run,
+        _save_report,
     ):
         repository = MagicMock()
         repository_class.return_value = repository
@@ -77,13 +79,23 @@ class SimulationUsesCompiledBotTests(unittest.TestCase):
         repository.load_disclosures.return_value = []
         repository.assess_trade_price_quality.return_value = {}
 
-        background_tasks = BackgroundTasks()
-        response = run_simulation(SimulationRunRequest(
-            periodStart="2026-01-01",
-            periodEnd="2026-01-02",
-            participantTypes=["PERSONAL_BOT"],
-            personalBotId="BOT_TEST",
-        ), background_tasks, user_id=1)
+        # #34: POST /run은 이제 job 상태만 즉시 반환하고 실제 결과는 bounded executor에서
+        # 채워진다 — 유닛테스트에서는 sync/async phase를 곧장 이어 실행해서 SIMULATION_RUN_CACHE에
+        # 쌓인 최종 결과를 검증한다.
+        service = SimulationRunService(
+            SimulationRunRequest(
+                periodStart="2026-01-01",
+                periodEnd="2026-01-02",
+                participantTypes=["PERSONAL_BOT"],
+                personalBotId="BOT_TEST",
+            ),
+            user_id=1,
+            schedule_report_enrichment=lambda *args, **kwargs: None,
+        )
+        cached = service.run_sync_phase()
+        self.assertIsNone(cached)
+        service.run_async_phase()
+        response = SIMULATION_RUN_CACHE[service.db_run_id]
 
         compiler_call.assert_not_called()
         repository.load_initial_snapshot.assert_called_once_with(27, "2026-01-01")
@@ -92,12 +104,10 @@ class SimulationUsesCompiledBotTests(unittest.TestCase):
         self.assertEqual(response["ruleSchema"], RULE_SCHEMA)
         self.assertTrue(response["ruleCompilation"]["reusedCompiledBot"])
         reserve_run.assert_called_once()
-        self.assertEqual(response["persistenceStatus"], "RUNNING")
         self.assertFalse(response["executionTimingMs"]["cacheHit"])
         self.assertGreaterEqual(response["executionTimingMs"]["responseReady"], 0.0)
         self.assertIn("monteCarlo500Runs", response["executionTimingMs"])
         self.assertIn("reportGeneration", response["executionTimingMs"])
-        self.assertEqual(len(background_tasks.tasks), 3)
         self.assertEqual(
             response["reportJson"]["generationMetadata"]["narrativeStatus"],
             "PENDING",

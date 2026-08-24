@@ -103,8 +103,12 @@ def startup_event():
 @app.on_event("shutdown")
 def shutdown_event():
     from app.modules.simulation.collectors.batch_cron import stop_batch_scheduler
+    from app.modules.simulation.analytics.analytics import shutdown_monte_carlo_executor
+    from app.api.endpoints.simulation_run_service import shutdown_run_executor
 
     stop_batch_scheduler()
+    shutdown_monte_carlo_executor()
+    shutdown_run_executor()
 
 @app.get("/", summary="루트 웰컴 메시지")
 def root_welcome():

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from app.api.endpoints import simulation
 from app.modules.simulation.analytics.report_generator import SimulationReportGenerator
@@ -21,29 +21,34 @@ class SimulationReportAsyncTests(unittest.TestCase):
             "report_json": report,
             "reportJson": report,
         }
-        background_tasks = BackgroundTasks()
 
-        with patch.object(simulation, "get_simulation_owner_id", return_value=1):
-            result = simulation.get_simulation_report(987654, background_tasks, user_id=1)
+        # #34: _schedule_report_enrichment는 더 이상 FastAPI BackgroundTasks가 아니라
+        # 데몬 스레드로 fire-and-forget한다 — threading.Thread.start()가 호출됐는지로
+        # "스케줄됐다"를 확인한다(실제 LLM 호출은 막아야 하니 Thread 자체를 patch).
+        with (
+            patch.object(simulation, "get_simulation_owner_id", return_value=1),
+            patch.object(simulation.threading, "Thread") as thread_cls,
+        ):
+            result = simulation.get_simulation_report(987654, user_id=1)
 
         # The stored report is answered in the delivered shape without waiting,
         # and the narrative it is still missing is scheduled behind the response.
         self.assertEqual(result["generationMetadata"]["narrativeStatus"], "PENDING")
         self.assertNotIn("reportVersion", result)
-        self.assertEqual(len(background_tasks.tasks), 1)
+        thread_cls.assert_called_once()
+        thread_cls.return_value.start.assert_called_once()
 
     def test_in_progress_enrichment_is_not_started_twice(self):
         simulation.REPORT_NARRATIVE_IN_PROGRESS.add(987654)
-        background_tasks = BackgroundTasks()
 
-        scheduled = simulation._schedule_report_enrichment(
-            background_tasks,
-            987654,
-            {"generationMetadata": {"narrativeStatus": "PENDING"}},
-        )
+        with patch.object(simulation.threading, "Thread") as thread_cls:
+            scheduled = simulation._schedule_report_enrichment(
+                987654,
+                {"generationMetadata": {"narrativeStatus": "PENDING"}},
+            )
 
         self.assertFalse(scheduled)
-        self.assertEqual(background_tasks.tasks, [])
+        thread_cls.assert_not_called()
 
     def test_background_enrichment_updates_persistence_and_cache(self):
         base_report = {"generationMetadata": {"narrativeStatus": "PENDING"}}
@@ -79,7 +84,7 @@ class SimulationOwnershipTests(unittest.TestCase):
 
         with patch.object(simulation, "get_simulation_owner_id", return_value=12):
             with self.assertRaises(HTTPException) as caught:
-                simulation.get_simulation_report(987654, BackgroundTasks(), user_id=1)
+                simulation.get_simulation_report(987654, user_id=1)
 
         self.assertEqual(caught.exception.status_code, 404)
 

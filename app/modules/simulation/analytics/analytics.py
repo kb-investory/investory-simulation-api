@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from math import floor
 from typing import Dict, Iterable, List, Optional
 
@@ -11,6 +14,55 @@ from app.modules.simulation.engine.backtest import BacktestEngine
 from app.modules.simulation.models import OrderAudit
 from app.modules.simulation.engine.strategies import RandomBotStrategy
 from app.modules.simulation.engine.evaluator import StockEvaluator
+
+# #32: 500회 몬테카를로 루프를 단일 스레드에서 순차 실행하면, 이 서비스가 동기 def 핸들러라
+# CPU 바운드 파이썬 코드는 GIL 때문에 요청이 몰려도 스레드를 늘리는 것만으론 병렬화가 안 된다
+# (로컬 실측: 5명 동시 avg 1.98s -> 50명 동시 avg 16.71s, 8~10배 느려짐). 각 시드의 계산은
+# seed 말고는 서로 공유하는 상태가 전혀 없는 embarrassingly parallel 구조라, 프로세스 풀로
+# 코어 수만큼 실제 병렬 실행한다 — 지연 생성 싱글턴으로 요청마다 프로세스를 새로 띄우는
+# 오버헤드를 피한다.
+_executor: Optional[ProcessPoolExecutor] = None
+
+
+def _get_monte_carlo_executor() -> ProcessPoolExecutor:
+    global _executor
+    if _executor is None:
+        _executor = ProcessPoolExecutor(max_workers=os.cpu_count())
+    return _executor
+
+
+def shutdown_monte_carlo_executor() -> None:
+    global _executor
+    if _executor is not None:
+        _executor.shutdown(wait=False, cancel_futures=True)
+        _executor = None
+
+
+def _simulate_random_trace(
+    seed: int,
+    period_start: str,
+    period_end: str,
+    initial_capital: float,
+    securities_map: Dict[int, dict],
+    daily_prices: List[dict],
+) -> float:
+    """단일 시드의 원숭이 봇 트레이스 하나를 실행해 최종 누적수익률(%)만 반환한다.
+
+    ProcessPoolExecutor로 넘겨지므로 인자/반환값이 전부 pickle 가능한 순수 데이터여야 한다
+    (BacktestEngine/RandomBotStrategy는 DB나 스레드 상태를 안 갖는 순수 계산 객체라 안전하다).
+    """
+    engine = BacktestEngine(
+        simulation_run_id=seed + 1,
+        period_start=period_start,
+        period_end=period_end,
+        initial_capital=initial_capital,
+        securities_map=securities_map,
+        daily_prices=daily_prices,
+    )
+    engine.register_variant(4, RandomBotStrategy(4, seed=seed))
+    _, snapshots = engine.run()
+    final_return = snapshots[-1].cumulative_return * 100 if snapshots else 0.0
+    return round(final_return, 4)
 
 
 def _quantile(sorted_values: List[float], probability: float) -> float:
@@ -32,20 +84,23 @@ def run_random_monte_carlo(
     run_count: int = 500,
     seed_start: int = 0,
 ) -> dict:
-    returns = []
-    for seed in range(seed_start, seed_start + run_count):
-        engine = BacktestEngine(
-            simulation_run_id=seed + 1,
-            period_start=period_start,
-            period_end=period_end,
-            initial_capital=initial_capital,
-            securities_map=securities_map,
-            daily_prices=daily_prices,
-        )
-        engine.register_variant(4, RandomBotStrategy(4, seed=seed))
-        _, snapshots = engine.run()
-        final_return = snapshots[-1].cumulative_return * 100 if snapshots else 0.0
-        returns.append(round(final_return, 4))
+    worker = partial(
+        _simulate_random_trace,
+        period_start=period_start,
+        period_end=period_end,
+        initial_capital=initial_capital,
+        securities_map=securities_map,
+        daily_prices=daily_prices,
+    )
+    seeds = range(seed_start, seed_start + run_count)
+    # chunksize 기본값(1)은 시드 500개를 각각 별도 작업으로 보내 매번 worker(=securities_map/
+    # daily_prices를 통째로 물고 있는 partial)를 새로 pickle한다 — 이 데이터가 작지 않아서(30종목
+    # x 수십~수백일), 500번 반복되는 직렬화 비용이 병렬화로 아끼는 시간보다 커진다(로컬 50명 동시
+    # 실측: chunksize=1일 때 순차 실행보다 오히려 느려짐). 워커 하나당 한 번만 보내지도록 청크를
+    # 크게 잡아 pickle 횟수를 코어 수 근처로 줄인다.
+    worker_count = os.cpu_count() or 1
+    chunksize = max(1, -(-run_count // worker_count))  # ceil division
+    returns = list(_get_monte_carlo_executor().map(worker, seeds, chunksize=chunksize))
 
     ordered = sorted(returns)
     return {

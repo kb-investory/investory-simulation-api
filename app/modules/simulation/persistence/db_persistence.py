@@ -434,6 +434,31 @@ def get_simulation_history_from_db(user_id: int = 1) -> Optional[List[dict]]:
             conn.close()
 
 
+def mark_simulation_run_failed(simulation_run_id: int, error_message: str) -> None:
+    """#34: 비동기 실행 단계(데이터 로딩~응답 조립) 중 어디서 예외가 나든 job을 FAILED로
+    표시한다. save_simulation_run_to_db는 그 함수 자신의 저장 단계 실패만 FAILED로 잡아주므로
+    (자체 except 블록), 그보다 앞선 단계(백테스트/분석 등)의 실패는 호출부가 직접 이 함수로
+    마킹해야 GET /{id}/status가 영영 RUNNING으로 멈춰있지 않는다.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE simulation_runs
+                SET run_status = 'FAILED', error_message = %s, completed_at = NOW()
+                WHERE simulation_run_id = %s
+                """,
+                (error_message[:1000], simulation_run_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_simulation_owner_id(simulation_run_id: int) -> Optional[int]:
     """Return the user a simulation belongs to, or None if there is no such run."""
     conn = None
